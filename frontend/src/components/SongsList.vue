@@ -19,7 +19,7 @@
       </div>
   
       <div class="songs-list">
-        <div class="song-item" v-for="song in songs" :key="song.id">
+        <div class="song-item" v-for="song in songs" :key="song.id" @click="playAudio">
           <img src="https://via.placeholder.com/40" class="me-3" alt="Album cover">
           <div class="flex-grow-1">
             <h6 class="mb-0">{{ song.name }}</h6>
@@ -32,20 +32,22 @@
   </template>
   
   <script>
+  import { mapActions } from 'vuex'
+
   export default {
     name: 'SongsList',
     data() {
       return {
         songs: [
           {
-            id: 1,
+            id: '1',
             name: 'Nombre de la Canción',
             artist: 'Artista',
             album: 'Álbum',
             duration: '3:45'
           },
           {
-            id: 2,
+            id: '2',
             name: 'Otra Canción',
             artist: 'Otro Artista',
             album: 'Otro Álbum',
@@ -53,6 +55,9 @@
           }
         ]
       }
+    },
+    methods: {
+      ...mapActions(['playAudio'])
     }
   }
   </script>

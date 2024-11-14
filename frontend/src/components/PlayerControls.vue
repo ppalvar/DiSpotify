@@ -3,7 +3,7 @@
       <div class="control-buttons mb-3">
         <button><i class="fas fa-random"></i></button>
         <button><i class="fas fa-step-backward"></i></button>
-        <button class="play-button" @click="playAudio">
+        <button class="play-button" @click="playAndPause">
           <i class="fas" :class="isPlaying ? 'fa-pause-circle' : 'fa-play-circle'"></i>
         </button>
         <button><i class="fas fa-step-forward"></i></button>
@@ -12,7 +12,7 @@
   
       <div class="progress-bar-container d-flex align-items-center container-fluid">
         <span class="text-muted me-2">{{ formattedRemainingTime }}</span>
-        <input type="range" class="progress-slider" min="0" max="100" :value="progressBarProgress">
+        <input type="range" class="progress-slider" min="0" max="100" :value="progressBarProgress" @click="moveToTime">
         <span class="text-muted ms-2">{{ formattedTotalDuration }}</span>
       </div>
   
@@ -45,7 +45,7 @@
       ])
     },
     methods: {
-      ...mapActions(['playAudio', 'setVolume'])
+      ...mapActions(['playAndPause', 'setVolume', 'moveToTime'])
     }
   }
   </script>
