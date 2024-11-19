@@ -1,7 +1,13 @@
-from rest_framework.response import Response
 from rest_framework import status
-from .serializers import AudioStreamerSerializer
+from rest_framework import viewsets
+
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated, AllowAny
+
+from .serializers import *
 from rest_framework.views import APIView
+
+from .models import *
 
 class AudioStreamerView(APIView):
     def get(self, request):
@@ -19,3 +25,49 @@ class AudioStreamerView(APIView):
 
         response = serializer.handle_request(query_params)
         return Response(response, status=status.HTTP_200_OK)
+
+class ArtistViewSet(viewsets.ModelViewSet):
+    queryset = Artist.objects.all()
+    serializer_class = ArtistSerializer
+    lookup_field = 'id'
+
+    permission_classes = [AllowAny]  # autenticación
+    
+    def get_queryset(self):
+        queryset = Artist.objects.all()
+        # Ejemplo de filtrado por nombre
+        name = self.request.query_params.get('name', None)
+        if name is not None:
+            queryset = queryset.filter(name__icontains=name)
+        return queryset
+
+
+class AlbumViewSet(viewsets.ModelViewSet):
+    queryset = Album.objects.all()
+    serializer_class = AlbumSerializer
+    lookup_field = 'id'
+
+    permission_classes = [AllowAny]  # autenticación
+    
+    def get_queryset(self):
+        queryset = Album.objects.all()
+        # Ejemplo de filtrado por nombre
+        name = self.request.query_params.get('name', None)
+        if name is not None:
+            queryset = queryset.filter(name__icontains=name)
+        return queryset
+
+class SongViewSet(viewsets.ModelViewSet):
+    queryset = Song.objects.all()
+    serializer_class = SongSerializer
+    lookup_field = 'id'
+
+    permission_classes = [AllowAny]  # autenticación
+    
+    def get_queryset(self):
+        queryset = Song.objects.all()
+        # Ejemplo de filtrado por nombre
+        name = self.request.query_params.get('name', None)
+        if name is not None:
+            queryset = queryset.filter(name__icontains=name)
+        return queryset
