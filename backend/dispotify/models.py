@@ -27,6 +27,9 @@ class Song(models.Model):
     title = models.CharField(max_length=100, null=True)
     album = models.ForeignKey(to=Album, null=True, on_delete=models.CASCADE)
     artist = models.ManyToManyField(to=Artist)
+    duration_seconds = models.IntegerField(null=False)
+    bitrate = models.IntegerField(null=False)
+    extension = models.CharField(max_length=10)
 
     def __str__(self) -> str:
         return f'<song_id={self.id} | {self.title}>'

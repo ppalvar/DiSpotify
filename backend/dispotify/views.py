@@ -61,13 +61,24 @@ class SongViewSet(viewsets.ModelViewSet):
     queryset = Song.objects.all()
     serializer_class = SongSerializer
     lookup_field = 'id'
-
     permission_classes = [AllowAny]  # autenticación
-    
+
     def get_queryset(self):
         queryset = Song.objects.all()
-        # Ejemplo de filtrado por nombre
+
+        # Filtrar por nombre de la canción
         name = self.request.query_params.get('name', None)
         if name is not None:
-            queryset = queryset.filter(name__icontains=name)
+            queryset = queryset.filter(title__icontains=name)
+
+        # Filtrar por nombre del artista
+        artist_name = self.request.query_params.get('artist', None)
+        if artist_name is not None:
+            queryset = queryset.filter(artist__name__icontains=artist_name)
+
+        # Filtrar por nombre del álbum
+        album_name = self.request.query_params.get('album', None)
+        if album_name is not None:
+            queryset = queryset.filter(album__name__icontains=album_name)
+
         return queryset

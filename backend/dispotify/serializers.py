@@ -1,11 +1,24 @@
-import os
+import os, io
+import uuid
+import time
+from pydub import AudioSegment
 import struct, base64
 from .models import *
+from dataclasses import dataclass
 from rest_framework import serializers
 from django.core.files.base import ContentFile
 
 HEADER_SIZE = 44
 CHUNK_SIZE = 1 << 15 #32kB
+
+@dataclass
+class AudioMetadata:
+    duration_seconds: int
+    bitrate: int
+    extension: str
+    channels: int
+    frame_rate: int
+    sample_width: int 
 
 class AudioStreamerSerializer(serializers.Serializer):
     chunk_index = serializers.IntegerField()
@@ -85,8 +98,14 @@ class ArtistSerializer(serializers.ModelSerializer):
         fields = ['id', 'name']
         
         extra_kwargs = {
-            'name': {'required': True, 'min_length': 1}
+            'name': {'required': True, 'min_length': 1},
+            'id': {'required': False}
         }
+    
+    def create(self, validated_data):
+        if 'id' not in validated_data:
+            validated_data['id'] = str(uuid.uuid4())  # Asignar un UUID aleatorio
+        return super().create(validated_data)
 
 class AlbumSerializer(serializers.ModelSerializer):
     class Meta:
@@ -97,28 +116,76 @@ class AlbumSerializer(serializers.ModelSerializer):
             'name': {'required': True, 'min_length': 1},
             'date': {'required': True},
             'author': {'required': True},
-        }
+            'id': {'required': False}
+            }
+    
+    def create(self, validated_data):
+        if 'id' not in validated_data:
+            validated_data['id'] = str(uuid.uuid4())  # Asignar un UUID aleatorio
+        return super().create(validated_data)
 
 class SongSerializer(serializers.ModelSerializer):
     file_base64 = serializers.CharField(write_only=True, required=False)
+    album_name = serializers.SerializerMethodField()
+    artist_names = serializers.SerializerMethodField()
 
     class Meta:
         model = Song
-        fields = ['id', 'title', 'album', 'artist', 'file_base64']
+        fields = ['id', 'title', 'album', 'artist', 'album_name', 'artist_names', 'file_base64', 'duration_seconds', 'bitrate', 'extension']
         extra_kwargs = {
             'title': {'required': True, 'min_length': 1},
             'artist': {'required': True},
+            'id': {'required': False},
+            'duration_seconds': {'required': False},
+            'bitrate': {'required': False},
+            'extension': {'required': False},
         }
+    
+    def get_audio_info(self, audio_bytes: bytes):
+        audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
+
+        # Obtener la duración en segundos
+        duration_seconds = len(audio) / 1000.0
+
+        # Obtener el bitrate
+        bitrate = audio.frame_rate * audio.frame_width * audio.channels
+
+        extension = 'unknown'  # Cambia esto si conoces el formato
+
+        # Otros datos interesantes
+        channels = audio.channels
+        frame_rate = audio.frame_rate
+        sample_width = audio.sample_width
+
+        metadata = AudioMetadata(duration_seconds, bitrate, extension, channels, frame_rate, sample_width)
+
+        return metadata
+
+    def get_album_name(self, obj):
+        return obj.album.name if obj.album else None
+
+    def get_artist_names(self, obj):
+        return [artist.name for artist in obj.artist.all()]
 
     def create(self, validated_data):
+        if 'id' not in validated_data:
+            validated_data['id'] = str(uuid.uuid4())
+
+        id = validated_data['id']
         file_base64 = validated_data.pop('file_base64', None)
+        data = base64.b64decode(file_base64)
+        metadata = self.get_audio_info(data)
+        
+        validated_data['duration_seconds'] = metadata.duration_seconds
+        validated_data['bitrate'] = metadata.bitrate
+        validated_data['extension'] = metadata.extension
+
         song = super().create(validated_data)
 
-        data = ContentFile(base64.b64decode(file_base64), name=f'{song.id}.wav')
-
         # Guardar el archivo en disco
-        file_path = os.path.join('media', 'songs', data.name)
+        file_path = f'../audios/{id}'
         with open(file_path, 'wb') as f:
-            f.write(data.read())
+            f.write(data)
 
         return song
+    

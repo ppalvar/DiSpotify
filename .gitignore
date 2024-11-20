@@ -485,3 +485,6 @@ $RECYCLE.BIN/
 
 *.wav
 .vscode
+
+audios
+*.sqlite3
