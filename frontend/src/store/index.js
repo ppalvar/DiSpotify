@@ -1,19 +1,23 @@
 import { createStore } from 'vuex'
 import AudioPlayer from '@/services/AudioPlayer'
+import PlaylistManager from '@/services/PlaylistManager'
 
 export default createStore({
 	state: {
-		audioPlayer: null,
+		audioPlayer: new AudioPlayer('http://127.0.0.1:8000/api/streamer'),
+		playlistManager: new PlaylistManager(),
 		currentSong: {
-			name: 'Nombre de la Canción',
-			artist: 'Artista',
-			album: 'Álbum'
+			name: '-----',
+			artist: '-----',
+			album: '-----'
 		},
 		isPlaying: false,
 		formattedRemainingTime: '00:00',
 		formattedTotalDuration: '00:00',
 		progressBarProgress: 0,
-		volume: 50
+		volume: 50,
+		songs: [],
+		repeat: false,
 	},
 	mutations: {
 		SET_AUDIO_PLAYER(state, player) {
@@ -29,38 +33,102 @@ export default createStore({
 		},
 		SET_VOLUME(state, volume) {
 			state.volume = volume
+		},
+		SET_CURRENT_SONG(state, song) {
+			state.currentSong = {
+				name: song.title,
+				album: song.album_name,
+				artist: song.artist_names.join(', ')
+			}
+		},
+		SET_SONGS(state, songs) {
+			state.songs = songs
+		},
+		SET_REPEAT(state, repeat) {
+			state.repeat = repeat;
 		}
 	},
 	actions: {
-		async playAudio({ state, commit }) {
-			if (!state.audioPlayer) {
-				const player = new AudioPlayer('http://127.0.0.1:8000/api/streamer')
-				commit('SET_AUDIO_PLAYER', player)
-			}
-			await state.audioPlayer.start('1')
-			commit('SET_PLAYING', true)
+		async playAudio({ state, commit }, songId) {
+			await state.audioPlayer.start(songId, state.volume)
+			state.playlistManager.setCurrentSong(songId)
 
-			setTimeUpdater(state, commit);
+			commit('SET_PLAYING', true)
+			commit('SET_CURRENT_SONG', state.playlistManager.getCurrentSong())
+			setTimeUpdater(state, commit)
+
+			state.audioPlayer.onPlaybackEnd = async () => {
+				if (!state.repeat) {
+					state.playlistManager.next()
+				}
+
+				const songId = state.playlistManager.getCurrentSong().id
+
+				await state.audioPlayer.start(songId, state.volume)
+				commit('SET_PLAYING', true)
+				commit('SET_CURRENT_SONG', state.playlistManager.getCurrentSong())
+				setTimeUpdater(state, commit)
+			}
 		},
+		//#region controls
 		setVolume({ state, commit }, event) {
 			const volume = event.target.value
 			commit('SET_VOLUME', volume)
-			if (state.audioPlayer) {
+			if (state.audioPlayer && state.audioPlayer.sound) {
 				state.audioPlayer.sound.volume(volume / 100)
 			}
 		},
 		playAndPause({ state, commit }) {
-			if (state.audioPlayer) {
+			if (state.audioPlayer && state.audioPlayer.sound) {
 				state.audioPlayer.playAndPause()
-				commit('SET_PLAYING', !state.sound.playing())
+				commit('SET_PLAYING', state.audioPlayer.sound.playing())
 				setTimeUpdater(state, commit)
 			}
 		},
 		moveToTime({ state, commit }, event) {
-			const timePercent = event.target.value / 100
-			state.audioPlayer.moveToPosition(null, timePercent)
+			if (state.audioPlayer && state.audioPlayer.sound) {
+				const timePercent = event.target.value / 100
+				state.audioPlayer.moveToPosition(null, timePercent)
 
-			commit('SET_PLAYING', true)
+				commit('SET_PLAYING', true)
+			}
+		},
+		prevSong({ state, commit }) {
+			if (state.audioPlayer && state.audioPlayer.sound && state.playlistManager) {
+				state.playlistManager.prev()
+				const songId = state.playlistManager.getCurrentSong().id
+
+				state.audioPlayer.start(songId, state.volume)
+				commit('SET_PLAYING', true)
+				commit('SET_CURRENT_SONG', state.playlistManager.getCurrentSong())
+				setTimeUpdater(state, commit)
+			}
+		}
+		,
+		nextSong({ state, commit }) {
+			if (state.audioPlayer && state.audioPlayer.sound && state.playlistManager) {
+				state.playlistManager.next()
+				const songId = state.playlistManager.getCurrentSong().id
+
+				state.audioPlayer.start(songId, state.volume)
+				commit('SET_PLAYING', true)
+				commit('SET_CURRENT_SONG', state.playlistManager.getCurrentSong())
+				setTimeUpdater(state, commit)
+			}
+		},
+		shuffleList({ state, commit }) {
+			if (state.playlistManager) {
+				state.playlistManager.shuffle()
+				commit('SET_SONGS', state.playlistManager.songs)
+			}
+		},
+		setAndUnsetRepeat({state, commit}) {
+			commit('SET_REPEAT', !state.repeat);
+		},
+		//#endregion
+		async fetchSongs({ state, commit }) {
+			const songs = await state.playlistManager.loadSongs()
+			commit('SET_SONGS', songs)
 		}
 	}
 })
@@ -68,7 +136,7 @@ export default createStore({
 function setTimeUpdater(state, commit) {
 	const interval = setInterval(() => {
 		if (state.audioPlayer.sound.playing()) {
-			const currentTime = state.audioPlayer.sound.seek();
+			const currentTime = state.audioPlayer.sound.seek()
 			updateTime(currentTime)
 		} else {
 			clearInterval(interval)
@@ -76,20 +144,20 @@ function setTimeUpdater(state, commit) {
 	}, 1000)
 
 	function updateTime(currentTime) {
-		const remainingTime = state.audioPlayer.duration - currentTime;
+		const remainingTime = state.audioPlayer.duration - currentTime
 
-		const formattedRemainingTime = formatTime(remainingTime);
-		const formattedTotalDuration = formatTime(state.audioPlayer.duration);
-		const progressBarProgress = Math.floor((currentTime / state.audioPlayer.duration) * 100);
+		const formattedRemainingTime = formatTime(remainingTime)
+		const formattedTotalDuration = formatTime(state.audioPlayer.duration)
+		const progressBarProgress = Math.floor((currentTime / state.audioPlayer.duration) * 100)
 
-		commit('SET_TIMES', { remaining: formattedRemainingTime, total: formattedTotalDuration, progress: progressBarProgress });
+		commit('SET_TIMES', { remaining: formattedRemainingTime, total: formattedTotalDuration, progress: progressBarProgress })
 	}
 	function formatTime(seconds) {
-		const totalMinutes = Math.floor(seconds / 60);
-		const totalSeconds = Math.floor(seconds % 60);
-		const formattedMinutes = String(totalMinutes).padStart(2, '0');
-		const formattedSeconds = String(totalSeconds).padStart(2, '0');
+		const totalMinutes = Math.floor(seconds / 60)
+		const totalSeconds = Math.floor(seconds % 60)
+		const formattedMinutes = String(totalMinutes).padStart(2, '0')
+		const formattedSeconds = String(totalSeconds).padStart(2, '0')
 
-		return `${formattedMinutes}:${formattedSeconds}`;
+		return `${formattedMinutes}:${formattedSeconds}`
 	}
 }

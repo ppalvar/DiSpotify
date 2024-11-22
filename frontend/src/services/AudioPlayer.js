@@ -5,29 +5,31 @@ export default class AudioPlayer {
         this.host = host;
         this.audioId = null;
         this.CHUNKS_TO_LOAD = 10;
+        this.onPlaybackEnd = () => { };
     }
 
-    async start(audioId) {
-        this.audioId = audioId;
-
-        const initData = await this.getFromApi(this.host, {
-            chunk_index: 0,
-            chunk_count: this.CHUNKS_TO_LOAD,
-            audio_id: this.audioId,
-            include_header: true,
-            include_metadata: true
-        });
-
-        this.initAudio(initData.metadata);
-        this.compileHeader(initData.header);
-
-        // Cargar los fragmentos de audio
-        for (let index = 0; index <= this.totalChunks; index += this.CHUNKS_TO_LOAD) {
-            await this.loadChunks(index, Math.min(this.CHUNKS_TO_LOAD, this.totalChunks - index));
+    async start(audioId, volume = null) {
+        if (audioId != this.audioId) {
+            this.audioId = audioId;
+    
+            const initData = await this.getFromApi(this.host, {
+                chunk_index: 0,
+                chunk_count: this.CHUNKS_TO_LOAD,
+                audio_id: this.audioId,
+                include_metadata: true
+            });
+    
+            this.initAudio(initData.metadata);
+    
+            for (let index = 0; index <= this.totalChunks; index += this.CHUNKS_TO_LOAD) {
+                await this.loadChunks(index, Math.min(this.CHUNKS_TO_LOAD, this.totalChunks - index));
+            }
         }
 
         this.isPlaying = true;
         this.playAudioBuffer();
+
+        this.setVolume(volume ?? 50);
     }
 
     // Función para realizar la petición a la API
@@ -59,29 +61,16 @@ export default class AudioPlayer {
         }
     }
 
-    // Inicializa los parámetros de audio
     initAudio(metadata) {
         this.isPlaying = false;
 
         this.totalChunks = metadata.total_chunks;
         this.chunkSize = metadata.chunk_size;
-        this.channels = metadata.channels;
-        this.sampleRate = metadata.sample_rate;
-        this.bitsPerSample = metadata.bits_per_sample;
         this.duration = metadata.duration;
 
-        this.cachedChunks = Array(this.totalChunks + 1).fill(false); // Uno extra para el header
-        this.audioContext = new window.AudioContext();
-        this.gainNode = this.audioContext.createGain();
+        this.fileSize = metadata.file_size ?? 0;
 
-        this.currentPosition = 0;
-        this.currentChunk = 0;
-
-        // Calcular el tamaño de salto en base a los parámetros
-        this.JUMP_SIZE = (this.chunkSize * this.CHUNKS_TO_LOAD) / (this.bitsPerSample / 8) / this.sampleRate / this.channels;
-
-        // Crear el array de bytes para el WAV
-        this.wavByteArray = new Uint8Array(44 + this.totalChunks * this.chunkSize).fill(0);
+        this.audioByteArray = new Uint8Array(this.fileSize).fill(0);
 
         this.source = null;
     }
@@ -103,27 +92,20 @@ export default class AudioPlayer {
         }
 
         this.sound.seek(positionInSeconds);
-        console.log(this.sound.seek())
     }
 
-    // Establece el volumen del audio
-    setVolume(value) {
-        const volume = Math.max(0, Math.min(1, value / 100)); // Asegurarse de que el volumen esté entre 0 y 1
-        this.gainNode.gain.setValueAtTime(volume, this.audioContext.currentTime); // Ajustar el volumen
+    setVolume(value = null) {
+        const volume = Math.max(0, Math.min(1, value / 100));
+        this.sound.volume(volume);
     }
 
-    // Añade fragmentos a los datos de audio
     addChunks(chunks, chunkIndex, chunkCount) {
         for (let i = 0; i < chunkCount; i++) {
             const index = chunkIndex + i;
-
-            if (this.cachedChunks[index]) continue;
             this.compileChunk(chunks[i], index);
-            this.cachedChunks[index] = true;
         }
     }
 
-    // Convierte una cadena base64 a un array de bytes
     base64ToByteArray(base64) {
         const binaryString = atob(base64);
         const byteArray = new Uint8Array(binaryString.length);
@@ -133,37 +115,29 @@ export default class AudioPlayer {
         return byteArray;
     }
 
-    // Compila y agrega el header al archivo WAV
-    compileHeader(header) {
-        this.addChunkToWAVFile(header, 0);
-    }
-
-    // Compila y agrega un fragmento de audio al archivo WAV
     compileChunk(chunk, index) {
-        const offset = 44 + index * this.chunkSize;
-        this.addChunkToWAVFile(chunk, offset);
-    }
-
-    // Agrega los datos de un fragmento a la estructura del WAV
-    addChunkToWAVFile(chunk, offset) {
+        const offset = index * this.chunkSize;
         const chunkAsBytes = this.base64ToByteArray(chunk);
-        this.wavByteArray.set(chunkAsBytes, offset);
+        this.audioByteArray.set(chunkAsBytes, offset);
     }
 
-    // Reproduce el buffer de audio
     playAudioBuffer() {
-        const blob = new Blob([this.wavByteArray], {type:'audio/wav'});
+        const blob = new Blob([this.audioByteArray], { type: 'audio/mp3' });
         const blobURL = URL.createObjectURL(blob);
-        
+
+        if (this.sound) {
+            this.sound.unload()
+        }
+
         this.sound = new Howl({
             src: [blobURL],
-            format: ['wav'],
+            format: ['mp3', 'wav', 'aac'],
             html5: true,
-            onload: function () {
-                console.log('Audio cargado y listo para reproducir');
-            },
             onloaderror: function (id, error) {
                 console.error('Error al cargar el audio:', error);
+            },
+            onend: () => {
+                this.onPlaybackEnd();
             }
         });
 
@@ -171,7 +145,6 @@ export default class AudioPlayer {
         this.isPlaying = true;
     }
 
-    // Carga los fragmentos de audio desde la API
     async loadChunks(chunkIndex, chunkCount = null) {
         const data = await this.getFromApi(this.host, {
             chunk_index: chunkIndex,
@@ -182,12 +155,5 @@ export default class AudioPlayer {
         });
 
         this.addChunks(data.chunks, data.chunk_index, data.chunk_count);
-    }
-
-    // Copia un array buffer
-    copy(src) {
-        const dst = new ArrayBuffer(src.byteLength);
-        new Uint8Array(dst).set(new Uint8Array(src));
-        return new Uint8Array(dst);
     }
 }
