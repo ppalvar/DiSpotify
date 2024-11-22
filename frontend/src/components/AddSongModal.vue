@@ -91,6 +91,7 @@
 </template>
 
 <script>
+import { mapActions } from "vuex";
 import axios from "axios";
 
 export default {
@@ -107,6 +108,8 @@ export default {
     };
   },
   methods: {
+    ...mapActions(["refreshSongs"]),
+
     openModal() {
       this.isVisible = true;
       this.fetchAlbums();
@@ -150,6 +153,7 @@ export default {
         });
         console.log("Song added successfully:", response.data);
         this.closeModal();
+        this.refreshSongs();
       } catch (error) {
         console.error("Error adding song:", error);
       }

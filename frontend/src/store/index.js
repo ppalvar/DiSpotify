@@ -129,6 +129,10 @@ export default createStore({
 		async fetchSongs({ state, commit }) {
 			const songs = await state.playlistManager.loadSongs()
 			commit('SET_SONGS', songs)
+		},
+		async refreshSongs({ state, commit }) {
+			const songs = await state.playlistManager.refresh()
+			commit('SET_SONGS', songs)
 		}
 	}
 })
