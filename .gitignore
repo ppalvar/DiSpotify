@@ -482,3 +482,9 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+*.wav
+.vscode
+
+audios
+*.sqlite3

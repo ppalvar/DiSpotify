@@ -1,0 +1,144 @@
+body {
+    background-color: #121212;
+    color: white;
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.navbar {
+    background-color: #000000;
+    z-index: 1000;
+}
+
+/* Layout principal */
+.main-container {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+/* Área de la canción actual (1/3 izquierda) */
+.current-song-area {
+    width: 33.333%;
+    background-color: #181818;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid #282828;
+}
+
+.current-song-info {
+    text-align: center;
+    padding: 20px;
+}
+
+.current-song-info img {
+    width: 250px;
+    height: 250px;
+    object-fit: cover;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 60px rgba(0, 0, 0, 0.5);
+}
+
+/* Área de la lista de canciones (2/3 derecha) */
+.songs-list-area {
+    width: 66.666%;
+    overflow-y: auto;
+    padding: 20px;
+}
+
+/* Estilos para los elementos de la lista */
+.song-item {
+    padding: 0.5rem;
+    border-radius: 4px;
+    transition: background-color 0.3s;
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.song-item:hover {
+    background-color: #282828;
+}
+
+.song-item img {
+    width: 40px;
+    height: 40px;
+    object-fit: cover;
+}
+
+/* Controles de reproducción */
+.player-controls {
+    margin-top: 20px;
+    text-align: center;
+}
+
+.control-buttons button {
+    background: none;
+    border: none;
+    color: #b3b3b3;
+    font-size: 1.2rem;
+    padding: 0 10px;
+    margin: 0 5px;
+}
+
+.control-buttons button:hover {
+    color: white;
+}
+
+.play-button {
+    font-size: 2.5rem !important;
+}
+
+/* Sliders */
+.progress-bar-container {
+    margin: 20px 0;
+}
+
+.volume-control {
+    margin-top: 20px;
+}
+
+input[type="range"] {
+    appearance: none;
+    width: 100%;
+    height: 4px;
+    background: #4f4f4f;
+    border-radius: 2px;
+    margin: 10px 0;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    background: #ffffff;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+/* Barra de búsqueda y filtros */
+.search-filter-container {
+    margin-bottom: 20px;
+}
+
+/* Scrollbar personalizada */
+.songs-list-area::-webkit-scrollbar {
+    width: 8px;
+}
+
+.songs-list-area::-webkit-scrollbar-track {
+    background: #121212;
+}
+
+.songs-list-area::-webkit-scrollbar-thumb {
+    background: #555;
+    border-radius: 4px;
+}
+
+.songs-list-area::-webkit-scrollbar-thumb:hover {
+    background: #666;
+}
