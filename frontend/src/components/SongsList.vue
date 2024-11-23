@@ -8,14 +8,19 @@
               type="text"
               class="form-control"
               placeholder="Buscar canciones..."
+              @input="getSearchText"
             />
-            <button class="btn btn-outline-secondary" type="button">
+            <button
+              class="btn btn-outline-secondary"
+              type="button"
+              @click="search"
+            >
               <i class="fas fa-search"></i>
             </button>
           </div>
         </div>
         <div class="col-md-4 text-end">
-          <button class="btn btn-outline-light">
+          <button class="btn btn-outline-light" @click="openFilterModal">
             <i class="fas fa-filter me-2"></i>Filtrar
           </button>
         </div>
@@ -23,7 +28,12 @@
     </div>
 
     <div class="songs-list">
-      <div class="song-item" v-for="song in songs" :key="song.id" @click="playAudio(song.id)">
+      <div
+        class="song-item"
+        v-for="song in songs"
+        :key="song.id"
+        @click="playAudio(song.id)"
+      >
         <img
           src="https://via.placeholder.com/40"
           class="me-3"
@@ -38,24 +48,43 @@
         <div class="text-muted">{{ formatTime(song.duration_seconds) }}</div>
       </div>
     </div>
+    <FilterModal ref="filterModal" />
   </div>
 </template>
 
 <script>
 import { mapActions, mapState } from "vuex";
+import FilterModal from "./FilterModal.vue";
 
 export default {
   name: "SongsList",
+  data() {
+    return {
+      searchText: "",
+    };
+  },
+  components: {
+    FilterModal,
+  },
   computed: {
     ...mapState(["songs"]),
   },
   methods: {
-    ...mapActions(["playAudio", "fetchSongs"]),
+    ...mapActions(["playAudio", "fetchSongs", "filter"]),
+    search() {
+      this.filter({ album: null, artist: null, name: this.searchText });
+    },
+    getSearchText(event) {
+      this.searchText = event.target.value;
+    },
     formatTime(time_seconds) {
       const minutes = String(Math.floor(time_seconds / 60)).padStart(2, "0");
       const seconds = String(Math.floor(time_seconds % 60)).padStart(2, "0");
-      
+
       return `${minutes}:${seconds}`;
+    },
+    openFilterModal() {
+      this.$refs.filterModal.openModal();
     },
   },
   mounted() {

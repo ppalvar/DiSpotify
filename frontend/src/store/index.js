@@ -18,6 +18,10 @@ export default createStore({
 		volume: 50,
 		songs: [],
 		repeat: false,
+		filters: {
+			artist: null,
+			album: null,
+		}
 	},
 	mutations: {
 		SET_AUDIO_PLAYER(state, player) {
@@ -45,7 +49,13 @@ export default createStore({
 			state.songs = songs
 		},
 		SET_REPEAT(state, repeat) {
-			state.repeat = repeat;
+			state.repeat = repeat
+		},
+		SET_FILTERS(state, { album, artist }) {
+			state.filters = {
+				album: album,
+				artist: artist,
+			}
 		}
 	},
 	actions: {
@@ -122,10 +132,12 @@ export default createStore({
 				commit('SET_SONGS', state.playlistManager.songs)
 			}
 		},
-		setAndUnsetRepeat({state, commit}) {
-			commit('SET_REPEAT', !state.repeat);
+		setAndUnsetRepeat({ state, commit }) {
+			commit('SET_REPEAT', !state.repeat)
 		},
 		//#endregion
+
+		//#region Songs getters
 		async fetchSongs({ state, commit }) {
 			const songs = await state.playlistManager.loadSongs()
 			commit('SET_SONGS', songs)
@@ -133,7 +145,13 @@ export default createStore({
 		async refreshSongs({ state, commit }) {
 			const songs = await state.playlistManager.refresh()
 			commit('SET_SONGS', songs)
+		},
+		async filter({ state, commit }, { album=null, artist=null, name=null}) {
+			commit('SET_FILTERS', { album: album, artist: artist, name:name })
+			const filteredSongs = await state.playlistManager.filter({ artist: artist, album: album, name:name })
+			commit('SET_SONGS', filteredSongs)
 		}
+		//#endregion
 	}
 })
 

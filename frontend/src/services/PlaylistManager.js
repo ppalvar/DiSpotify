@@ -8,6 +8,7 @@ class PlaylistManager {
         this.filters = {
             artist: null,
             album: null,
+            name: null
         };
         this.loadSongs();
     }
@@ -36,15 +37,17 @@ class PlaylistManager {
         return this.songs;
     }
 
-    filter({ artist = null, album = null }) {
-        this.filters.artist = artist;
-        this.filters.album = album;
-        this.refresh();
+    async filter({ artist = null, album = null, name = null }) {
+        if (artist !== null) this.filters.artist = artist;
+        if (album !== null) this.filters.album = album;
+        if (name !== null) this.filters.name = name;
+
+        return await this.refresh();
     }
 
     setCurrentSong(songId) {
         const newIndex = this.songs.findIndex((song) => song.id === songId);
-        
+
         this.currentIndex = newIndex;
     }
 

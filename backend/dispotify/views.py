@@ -72,13 +72,13 @@ class SongViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(title__icontains=name)
 
         # Filtrar por nombre del artista
-        artist_name = self.request.query_params.get('artist', None)
-        if artist_name is not None:
-            queryset = queryset.filter(artist__name__icontains=artist_name)
+        artist_ids = self.request.query_params.getlist('artist[]', None)
+        if artist_ids:
+            queryset = queryset.filter(artist__id__in=artist_ids)
 
         # Filtrar por nombre del álbum
-        album_name = self.request.query_params.get('album', None)
-        if album_name is not None:
-            queryset = queryset.filter(album__name__icontains=album_name)
+        album_id = self.request.query_params.get('album', None)
+        if album_id:
+            queryset = queryset.filter(album__id=album_id)
 
         return queryset
