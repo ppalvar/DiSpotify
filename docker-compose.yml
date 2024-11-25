@@ -1,0 +1,62 @@
+version: "3.8"
+
+services:
+  router:
+    build:
+      context: .
+      dockerfile: docker/router.Dockerfile
+    container_name: router
+    cap_add:
+      - NET_ADMIN
+    networks:
+      clients:
+        ipv4_address: 10.0.10.254
+      servers:
+        ipv4_address: 10.0.11.254
+    command: ["sleep", "infinity"] # Mantener el contenedor en ejecución
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    container_name: frontend
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - 8080:8080
+      - 8000:8000
+    networks:
+      - clients
+    volumes:
+      - ./frontend:/app/frontend
+      # - ./node_modules:/app/node_modules
+    working_dir: /app/frontend
+    command: ["sh", "-c", "./startup.sh"]
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    container_name: backend
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - servers
+    volumes:
+      - ./backend:/app/backend
+      - ./audios:/app/audios
+    working_dir: /app/backend
+    command: ["sh", "-c", "/app/backend.sh && python manage.py runserver 0.0.0.0:8000"] # Comando para iniciar el servidor de desarrollo de Django
+
+networks:
+  clients:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.0.10.0/24
+
+  servers:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.0.11.0/24
