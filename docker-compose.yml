@@ -29,7 +29,6 @@ services:
       - clients
     volumes:
       - ./frontend:/app/frontend
-      # - ./node_modules:/app/node_modules
     working_dir: /app/frontend
     command: ["sh", "-c", "./startup.sh"]
 
