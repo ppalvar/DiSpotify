@@ -488,3 +488,4 @@ $RECYCLE.BIN/
 
 audios
 *.sqlite3
+ssl_cert
