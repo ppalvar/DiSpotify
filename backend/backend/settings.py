@@ -40,7 +40,8 @@ INSTALLED_APPS = [
     'rest_framework',
     'drf_spectacular',
     'corsheaders',
-    'dispotify'
+    'dispotify',
+    'chord'
 ]
 
 REST_FRAMEWORK = {
