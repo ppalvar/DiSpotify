@@ -6,6 +6,7 @@ import logging
 import socket
 import ssl
 import struct
+import time
 from uuid import uuid4
 from typing import List, Optional
 from pydantic import BaseModel
@@ -28,6 +29,8 @@ from chord.chord_messages import (
 
 PING_INTERVAL = 3  # seconds
 
+MULTICAST_PORT = 2222
+
 UPDATE_FTABLE_REQUEST = "UPDATE_FTABLE_REQUEST"
 JOIN_REQUEST = "JOIN_REQUEST"
 SUCC_REQUEST = "SUCC_REQUEST"
@@ -36,6 +39,10 @@ UPDATE_PRED_REQUEST = "UPDATE_PRED_REQUEST"
 UPDATE_SUCC_REQUEST = "UPDATE_SUCC_REQUEST"
 RESPONSE = "RESPONSE"
 PING = "PING"
+ADOPTION_REQUEST = "ADOPTION_REQUEST"
+UPDATE_ALL_FTABLES_REQUEST = "UPDATE_ALL_FTABLES_REQUEST"
+MULTICAST = "MULTICAST"
+
 
 CHORD_MESSAGE_TYPES = [
     JOIN_REQUEST,
@@ -46,6 +53,9 @@ CHORD_MESSAGE_TYPES = [
     UPDATE_PRED_REQUEST,
     UPDATE_SUCC_REQUEST,
     PING,
+    ADOPTION_REQUEST,
+    UPDATE_ALL_FTABLES_REQUEST,
+    MULTICAST,
 ]
 
 
@@ -121,9 +131,9 @@ class ChordNode:
 
     def __init__(
         self,
-        ip_address: str | None = "localhost",
-        port: int | None = 4321,
-        node_id: int | None = 0,
+        ip_address: str = "localhost",
+        port: int = 4321,
+        node_id: int = 0,
         id_bitlen: int = 32,
         is_debug: bool = False,
     ) -> None:
@@ -142,8 +152,10 @@ class ChordNode:
 
             self.is_debug = is_debug
 
-            logging.basicConfig(level=logging.INFO)
+            logging.basicConfig(level=logging.DEBUG)
             self.logger = logging.getLogger(__name__)
+
+            self.must_update_ftables = False
 
             self.initialized = True
 
@@ -163,9 +175,10 @@ class ChordNode:
             self.handle_connection, self.ip_address, self.port, ssl=ssl_context
         )
         async with server:
-            self.is_debug and self.logger.info(
-                f"Node {self.node_id} listening on {self.ip_address}:{self.port} with TLS"
-            )
+            if self.is_debug:
+                self.logger.info(
+                    f"Node {self.node_id} listening on {self.ip_address}:{self.port} with TLS"
+                )
             await server.serve_forever()
 
     async def handle_connection(
@@ -175,20 +188,19 @@ class ChordNode:
             data = await reader.read(1024)
             message = ChordMessage.decode(data)
             if message:
-                self.is_debug and self.logger.debug(
-                    f"Received message from node {message.source_id}."
-                )
+                if self.is_debug:
+                    self.logger.debug(
+                        f"Received message from node {message.source_id} of type {message.message_type}."
+                    )
                 await self.handle_message(message, reader, writer)
             else:
-                self.is_debug and self.logger.debug("Received invalid message")
+                if self.is_debug:
+                    self.logger.debug("Received invalid message")
             writer.close()
             await writer.wait_closed()
         except Exception as e:
-            self.is_debug and self.logger.debug(
-                f"Some error occured while handling message: {e}"
-            )
-
-        print(self.finger_table)
+            if self.is_debug:
+                self.logger.debug(f"Some error occured while handling message: {e}")
 
     async def stabilize(self) -> None:
         last_entry = self.succesor
@@ -196,13 +208,15 @@ class ChordNode:
         while True:
             await asyncio.sleep(PING_INTERVAL)
 
+            if self.must_update_ftables:
+                await self.update_all_finger_tables()
+
             if self.succesor.node_id != self.node_id:
                 succ_response = await self.ping_node(self.succesor)
 
                 if not succ_response:
-                    self.is_debug and self.logger.debug(
-                        "Successor node died, stibilizing..."
-                    )
+                    if self.is_debug:
+                        self.logger.warning("Successor node died, stibilizing...")
 
                     self.succesor = last_entry
 
@@ -214,14 +228,20 @@ class ChordNode:
                         self.succesor,
                     )
 
-                    self.is_debug and self.logger.debug("STABILIZING DONE!")
+                    if self.is_debug:
+                        self.logger.info("STABILIZING DONE!")
 
                 else:
                     _, last_entry = succ_response
-                    self.is_debug and self.logger.debug("Everything all right!")
+                    if self.is_debug:
+                        self.logger.info("Everything all right!")
 
     async def start(self) -> None:
-        await asyncio.gather(self.listen(), self.stabilize())
+        await asyncio.gather(
+            self.listen(),
+            self.stabilize(),
+            self.start_discovery_server(),
+        )
 
     async def handle_message(
         self,
@@ -282,6 +302,27 @@ class ChordNode:
                 writer=writer,
             )
 
+        elif ms_type == ADOPTION_REQUEST:
+            if self.predecessor.node_id == self.node_id == self.succesor.node_id:
+                self.ring_signature = message.ring_signature
+
+                await self.send_message(
+                    "RESPONSE",
+                    GenericResponse(is_success=True),
+                    reader=reader,
+                    writer=writer,
+                )
+            else:
+                await self.send_message(
+                    "RESPONSE",
+                    GenericResponse(
+                        is_success=False,
+                        message="This node has a family, it cannot be adopted.",
+                    ),
+                    reader=reader,
+                    writer=writer,
+                )
+
         elif self.ring_signature != message.ring_signature:
             await self.send_message(
                 "RESPONSE",
@@ -294,13 +335,14 @@ class ChordNode:
                 omit_signature=True,
             )
 
-        if ms_type == SUCC_REQUEST:
+        elif ms_type == SUCC_REQUEST:
             assert isinstance(message.content, SuccRequestMessage)
             succesor = await self.find_successor(message.content.target_id)
 
-            self.is_debug and self.logger.debug(
-                f"SUCC REQUEST: {message.source_id} requested succ of {message.content.target_id}, response is {succesor.node_id}."
-            )
+            if self.is_debug:
+                self.logger.debug(
+                    f"SUCC REQUEST: {message.source_id} requested succ of {message.content.target_id}, response is {succesor.node_id}."
+                )
             success = True
 
             if not isinstance(message.content, SuccRequestMessage):
@@ -318,7 +360,7 @@ class ChordNode:
                 writer=writer,
             )
 
-        if ms_type == PRED_REQUEST:
+        elif ms_type == PRED_REQUEST:
             assert isinstance(message.content, PredRequestMessage)
 
             await self.send_message(
@@ -333,7 +375,7 @@ class ChordNode:
                 writer=writer,
             )
 
-        if ms_type == UPDATE_FTABLE_REQUEST:
+        elif ms_type == UPDATE_FTABLE_REQUEST:
             assert isinstance(message.content, UpdateFTableRequest)
 
             new_responsible = ChordNodeReference(
@@ -362,7 +404,7 @@ class ChordNode:
                 writer=writer,
             )
 
-        if ms_type == UPDATE_SUCC_REQUEST:
+        elif ms_type == UPDATE_SUCC_REQUEST:
             assert isinstance(message.content, UpdateSuccRequestMessage)
 
             self.succesor = ChordNodeReference(
@@ -371,7 +413,7 @@ class ChordNode:
                 message.content.new_succ_node_id,
             )
 
-        if ms_type == UPDATE_PRED_REQUEST:
+        elif ms_type == UPDATE_PRED_REQUEST:
             assert isinstance(message.content, UpdatePredRequestMessage)
 
             self.predecessor = ChordNodeReference(
@@ -380,7 +422,7 @@ class ChordNode:
                 message.content.new_pred_node_id,
             )
 
-        if ms_type == PING:
+        elif ms_type == PING:
             await self.send_message(
                 "RESPONSE",
                 PingResponse(
@@ -395,6 +437,16 @@ class ChordNode:
                 ),
                 reader=reader,
                 writer=writer,
+            )
+
+        elif ms_type == UPDATE_ALL_FTABLES_REQUEST:
+            self.must_update_ftables = True
+            await self.send_message(
+                "RESPONSE",
+                GenericResponse(is_success=True),
+                reader=reader,
+                writer=writer,
+                omit_signature=True,
             )
 
     async def send_message(
@@ -427,6 +479,9 @@ class ChordNode:
             if not reader or not writer:
                 ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
                 ssl_context.load_verify_locations(cafile="ssl_cert/cert.pem")
+
+                ssl_context.check_hostname = False
+
                 reader, writer = await asyncio.open_connection(
                     target_ip, target_port, ssl=ssl_context
                 )
@@ -434,8 +489,6 @@ class ChordNode:
 
             writer.write(message_encoded)
             await writer.drain()
-
-            self.is_debug and self.logger.debug(f"Message sent to node {target_id}.")
 
             if clean:
                 response = await reader.read(1024)
@@ -445,7 +498,8 @@ class ChordNode:
                 response = ChordMessage.decode(response)
                 return response
         except Exception as e:
-            self.is_debug and self.logger.debug(f"Failed to send message: {e}")
+            if self.is_debug:
+                self.logger.debug(f"Failed to send message: {e}")
 
     async def request_join(
         self, target_ip: str, target_port: int, target_id: int
@@ -485,23 +539,25 @@ class ChordNode:
 
             await self.update_all_finger_tables()
 
-            self.is_debug and self.logger.debug("Successfully joined!")
+            if self.is_debug:
+                self.logger.debug("Successfully joined!")
         else:
-            self.is_debug and self.logger.debug(
-                f"Couldn't join: {response.content.message}"
-            )
+            if self.is_debug:
+                self.logger.debug(f"Couldn't join: {response.content.message}")
 
     async def find_successor(self, target_id: int) -> ChordNodeReference:
         if is_between(target_id, self.predecessor.node_id + 1, self.node_id):
-            self.is_debug and self.logger.debug(
-                f"({self.node_id}, {self.predecessor.node_id}, {self.succesor.node_id})Succ of {target_id} is current node {self.node_id}"
-            )
+            if self.is_debug:
+                self.logger.debug(
+                    f"({self.node_id}, {self.predecessor.node_id}, {self.succesor.node_id})Succ of {target_id} is current node {self.node_id}"
+                )
             return self.auto_ref
 
         if is_between(target_id, self.node_id + 1, self.succesor.node_id):
-            self.is_debug and self.logger.debug(
-                f"({self.node_id}, {self.predecessor.node_id}, {self.succesor.node_id})Succ of {target_id} is successor of current node {self.succesor.node_id}"
-            )
+            if self.is_debug:
+                self.logger.debug(
+                    f"({self.node_id}, {self.predecessor.node_id}, {self.succesor.node_id})Succ of {target_id} is successor of current node {self.succesor.node_id}"
+                )
             return self.succesor
 
         best_match = self.succesor
@@ -509,9 +565,10 @@ class ChordNode:
             if is_between(target_id, self.node_id, entry.node_id):
                 best_match = entry
 
-        self.is_debug and self.logger.debug(
-            f"({self.node_id}, {self.predecessor.node_id}, {self.succesor.node_id})Succ of {target_id} is in {best_match.node_id}"
-        )
+        if self.is_debug:
+            self.logger.debug(
+                f"({self.node_id}, {self.predecessor.node_id}, {self.succesor.node_id})Succ of {target_id} is in {best_match.node_id}"
+            )
 
         response = await self.send_message(
             SUCC_REQUEST,
@@ -551,6 +608,16 @@ class ChordNode:
     async def request_update_successor(
         self, target: ChordNodeReference, new_successor: ChordNodeReference
     ) -> None:
+        self.logger.debug(
+            f"Updating successor of {target.node_id} to {new_successor.node_id}."
+        )
+        if self.node_id == target.node_id:
+            self.logger.debug(
+                f"Successor of {self.node_id} is {self.succesor.node_id}."
+            )
+            self.succesor = new_successor
+            return
+
         await self.send_message(
             UPDATE_SUCC_REQUEST,
             UpdateSuccRequestMessage(
@@ -566,6 +633,16 @@ class ChordNode:
     async def request_update_predecessor(
         self, target: ChordNodeReference, new_predecessor: ChordNodeReference
     ) -> None:
+        self.logger.debug(
+            f"Updatin predecessor of {target.node_id} to {new_predecessor.node_id}."
+        )
+        if self.node_id == target.node_id:
+            self.predecessor = new_predecessor
+            self.logger.debug(
+                f"Predecessor of {self.node_id} is {self.predecessor.node_id}."
+            )
+            return
+
         await self.send_message(
             UPDATE_PRED_REQUEST,
             UpdatePredRequestMessage(
@@ -605,6 +682,9 @@ class ChordNode:
         current = self.succesor
 
         while current.node_id != self.node_id:
+            self.logger.debug(
+                f"Updating ftable of {current.node_id}, last one {last.node_id}"
+            )
             await self.update_finger_table_static(
                 last.node_id + 1,
                 current.node_id,
@@ -686,6 +766,161 @@ class ChordNode:
 
         return replicants
 
+    async def start_discovery_server(
+        self,
+        multicast_group: str = "224.0.0.1",
+        port: int = MULTICAST_PORT,
+    ):
+        class DiscoveryServerProtocol(asyncio.DatagramProtocol):
+            def __init__(_self):
+                _self.transport = None
+
+            def connection_made(_self, transport):
+                _self.transport = transport
+                if self.is_debug:
+                    self.logger.debug(
+                        f"Discovery server listening on UDP {self.ip_address}:{port}."
+                    )
+
+            def datagram_received(_self, data: bytes, addr: str) -> None:
+                rcv_message = ChordMessage.decode(data)
+
+                if not rcv_message:
+                    if self.is_debug:
+                        self.logger.debug(
+                            f"Invalid multicast message received: {data.decode()}"
+                        )
+                    return
+
+                if rcv_message.ring_signature.strip():
+                    if self.is_debug:
+                        self.logger.debug(
+                            f"Invalid ring signature received on multicast: {rcv_message.ring_signature}"
+                        )
+                    return
+
+                ip_addres, _ = addr
+                port = self.port
+
+                node_ref = ChordNodeReference(
+                    ip_addres,
+                    port,
+                    rcv_message.source_id,
+                )
+
+                time.sleep(0.2)
+
+                asyncio.create_task(self.join_node(node_ref))
+
+            def error_received(_self, exc: Exception) -> None:
+                if self.is_debug:
+                    self.logger.error(f"Multicast error received: {exc}")
+
+            def connection_lost(_self, exc: Exception) -> None:
+                if self.is_debug:
+                    self.logger.error(f"Multicast connection lost: {exc}")
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(("", port))
+
+        group = socket.inet_aton(multicast_group)
+        mreq = struct.pack("4sL", group, socket.INADDR_ANY)
+
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        loop = asyncio.get_running_loop()
+
+        await loop.create_datagram_endpoint(
+            lambda: DiscoveryServerProtocol(),
+            sock=sock,
+        )
+
+        while True:
+            await asyncio.sleep(100000)
+
+    async def join_node(self, node_ref: ChordNodeReference) -> None:
+        succ = await self.find_successor(node_ref.node_id)
+        pred = await self.find_predecessor(succ.node_id)
+
+        self.logger.debug(
+            f"Found predecessor {succ.node_id} and predecessor {pred.node_id}."
+        )
+
+        if succ.node_id == node_ref.node_id:
+            # The node already is joined to the ring
+            return
+
+        self.logger.debug("Adopting node")
+        adopt_response = await self.send_message(
+            ADOPTION_REQUEST,
+            MessageContent(),
+            node_ref.ip_address,
+            node_ref.port,
+            node_ref.node_id,
+        )
+
+        if (
+            not adopt_response
+            or not isinstance(adopt_response.content, GenericResponse)
+            or not adopt_response.content.is_success
+        ):
+            # The node cannot be adopted
+            self.logger.debug("Cannot adopt node")
+
+            return
+
+        self.logger.debug("Node adopted")
+
+        await self.request_update_successor(node_ref, succ)
+        await self.request_update_predecessor(node_ref, pred)
+
+        await self.request_update_successor(pred, node_ref)
+        await self.request_update_predecessor(succ, node_ref)
+
+    def multicast_sender(
+        self,
+        message_content: BaseModel,
+        multicast_group: str = "224.0.0.1",
+        port: int = MULTICAST_PORT,
+    ) -> None:
+        message = ChordMessage(
+            MULTICAST,
+            self.node_id,
+            "",
+            message_content,
+        )
+
+        message_encoded = message.encode()
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        ttl = struct.pack("b", 1)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
+
+        try:
+            sock.sendto(message_encoded, (multicast_group, port))
+            if self.is_debug:
+                self.logger.debug("Message sent using multicast.")
+        except Exception as ex:
+            if self.is_debug:
+                self.logger.error(f"Error sending multicast message: {ex}")
+        finally:
+            sock.close()
+
+    async def discover(self):
+        self.multicast_sender(MessageContent())
+
+        await asyncio.sleep(1)
+
+        await self.update_all_finger_tables()
+
+    async def discover_join_start(self) -> None:
+        await asyncio.gather(
+            self.discover(),
+            self.start(),
+        )
+
 
 def get_hash(key: str, bit_count: int = 32) -> int:
     sha256_hash = hashlib.sha256()
@@ -699,7 +934,7 @@ def get_hash(key: str, bit_count: int = 32) -> int:
 def get_ip_address(ifname: str = "eth0") -> str:
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        ip_address = fcntl.ioctl(
+        ip_address = fcntl.ioctl(  # type: ignore
             s.fileno(),
             0x8915,  # SIOCGIFADDR
             struct.pack("256s", ifname[:15].encode("utf-8")),
@@ -716,16 +951,23 @@ def is_between(id: int, a: int, b: int) -> bool:
 
 
 async def main() -> None:
-    id = int(input("Enter the id: "))
-    ip = "localhost"
-    port = 5000 + id
+    ip = get_ip_address()
+    port = 5000
+    id = get_hash(f"{ip}:{port}")
 
-    node = ChordNode(ip, port, id, 10, True)
+    node = ChordNode(ip, port, id, is_debug=True)
 
-    if port != 5000:
-        await node.request_join(ip, 5000, 0)
+    print(f"Node with Id {id} on {ip}:{port}.")
+    choice = input("1 to start node as a new network\n2 to search and join a network\n")
 
-    await node.start()
+    if choice == "1":
+        await node.start()
+    elif choice == "2":
+        await node.discover_join_start()
+        # await node.request_join("10.0.1.2", 5000, 4206084663)
+        # await node.start()
+    else:
+        print("Invalid option!!!")
 
 
 if __name__ == "__main__":
