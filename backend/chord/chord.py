@@ -150,9 +150,7 @@ class ChordNode:
             self.succesor = self.predecessor = self.auto_ref
             self.finger_table = FingerTable(self.auto_ref, self.id_bitlen)
 
-            self.is_debug = is_debug
-
-            logging.basicConfig(level=logging.DEBUG)
+            logging.basicConfig(level=logging.DEBUG if is_debug else logging.INFO)
             self.logger = logging.getLogger(__name__)
 
             self.must_update_ftables = False
@@ -175,10 +173,9 @@ class ChordNode:
             self.handle_connection, self.ip_address, self.port, ssl=ssl_context
         )
         async with server:
-            if self.is_debug:
-                self.logger.info(
-                    f"Node {self.node_id} listening on {self.ip_address}:{self.port} with TLS"
-                )
+            self.logger.info(
+                f"Node {self.node_id} listening on {self.ip_address}:{self.port} with TLS"
+            )
             await server.serve_forever()
 
     async def handle_connection(
@@ -188,19 +185,16 @@ class ChordNode:
             data = await reader.read(1024)
             message = ChordMessage.decode(data)
             if message:
-                if self.is_debug:
-                    self.logger.debug(
-                        f"Received message from node {message.source_id} of type {message.message_type}."
-                    )
+                self.logger.debug(
+                    f"Received message from node {message.source_id} of type {message.message_type}."
+                )
                 await self.handle_message(message, reader, writer)
             else:
-                if self.is_debug:
-                    self.logger.debug("Received invalid message")
+                self.logger.debug("Received invalid message")
             writer.close()
             await writer.wait_closed()
         except Exception as e:
-            if self.is_debug:
-                self.logger.debug(f"Some error occured while handling message: {e}")
+            self.logger.debug(f"Some error occured while handling message: {e}")
 
     async def stabilize(self) -> None:
         last_entry = self.succesor
@@ -212,11 +206,11 @@ class ChordNode:
                 await self.update_all_finger_tables()
 
             if self.succesor.node_id != self.node_id:
+                self.logger.debug("Sending ping to successor node.")
                 succ_response = await self.ping_node(self.succesor)
 
                 if not succ_response:
-                    if self.is_debug:
-                        self.logger.warning("Successor node died, stibilizing...")
+                    self.logger.warning("Successor node died, stibilizing...")
 
                     self.succesor = last_entry
 
@@ -228,13 +222,11 @@ class ChordNode:
                         self.succesor,
                     )
 
-                    if self.is_debug:
-                        self.logger.info("STABILIZING DONE!")
+                    self.logger.info("STABILIZING DONE!")
 
                 else:
                     _, last_entry = succ_response
-                    if self.is_debug:
-                        self.logger.info("Everything all right!")
+                    self.logger.debug("Everything all right!")
 
     async def start(self) -> None:
         await asyncio.gather(
@@ -339,10 +331,6 @@ class ChordNode:
             assert isinstance(message.content, SuccRequestMessage)
             succesor = await self.find_successor(message.content.target_id)
 
-            if self.is_debug:
-                self.logger.debug(
-                    f"SUCC REQUEST: {message.source_id} requested succ of {message.content.target_id}, response is {succesor.node_id}."
-                )
             success = True
 
             if not isinstance(message.content, SuccRequestMessage):
@@ -498,8 +486,7 @@ class ChordNode:
                 response = ChordMessage.decode(response)
                 return response
         except Exception as e:
-            if self.is_debug:
-                self.logger.debug(f"Failed to send message: {e}")
+            self.logger.debug(f"Failed to send message: {e}")
 
     async def request_join(
         self, target_ip: str, target_port: int, target_id: int
@@ -539,36 +526,21 @@ class ChordNode:
 
             await self.update_all_finger_tables()
 
-            if self.is_debug:
-                self.logger.debug("Successfully joined!")
+            self.logger.info("Successfully joined to network!")
         else:
-            if self.is_debug:
-                self.logger.debug(f"Couldn't join: {response.content.message}")
+            self.logger.info(f"Couldn't join: {response.content.message}")
 
     async def find_successor(self, target_id: int) -> ChordNodeReference:
         if is_between(target_id, self.predecessor.node_id + 1, self.node_id):
-            if self.is_debug:
-                self.logger.debug(
-                    f"({self.node_id}, {self.predecessor.node_id}, {self.succesor.node_id})Succ of {target_id} is current node {self.node_id}"
-                )
             return self.auto_ref
 
         if is_between(target_id, self.node_id + 1, self.succesor.node_id):
-            if self.is_debug:
-                self.logger.debug(
-                    f"({self.node_id}, {self.predecessor.node_id}, {self.succesor.node_id})Succ of {target_id} is successor of current node {self.succesor.node_id}"
-                )
             return self.succesor
 
         best_match = self.succesor
         for entry in self.finger_table:
             if is_between(target_id, self.node_id, entry.node_id):
                 best_match = entry
-
-        if self.is_debug:
-            self.logger.debug(
-                f"({self.node_id}, {self.predecessor.node_id}, {self.succesor.node_id})Succ of {target_id} is in {best_match.node_id}"
-            )
 
         response = await self.send_message(
             SUCC_REQUEST,
@@ -608,13 +580,7 @@ class ChordNode:
     async def request_update_successor(
         self, target: ChordNodeReference, new_successor: ChordNodeReference
     ) -> None:
-        self.logger.debug(
-            f"Updating successor of {target.node_id} to {new_successor.node_id}."
-        )
         if self.node_id == target.node_id:
-            self.logger.debug(
-                f"Successor of {self.node_id} is {self.succesor.node_id}."
-            )
             self.succesor = new_successor
             return
 
@@ -633,14 +599,8 @@ class ChordNode:
     async def request_update_predecessor(
         self, target: ChordNodeReference, new_predecessor: ChordNodeReference
     ) -> None:
-        self.logger.debug(
-            f"Updatin predecessor of {target.node_id} to {new_predecessor.node_id}."
-        )
         if self.node_id == target.node_id:
             self.predecessor = new_predecessor
-            self.logger.debug(
-                f"Predecessor of {self.node_id} is {self.predecessor.node_id}."
-            )
             return
 
         await self.send_message(
@@ -682,9 +642,8 @@ class ChordNode:
         current = self.succesor
 
         while current.node_id != self.node_id:
-            self.logger.debug(
-                f"Updating ftable of {current.node_id}, last one {last.node_id}"
-            )
+            self.logger.debug(f"Updating ftable of {current.node_id}.")
+
             await self.update_finger_table_static(
                 last.node_id + 1,
                 current.node_id,
@@ -777,26 +736,21 @@ class ChordNode:
 
             def connection_made(_self, transport):
                 _self.transport = transport
-                if self.is_debug:
-                    self.logger.debug(
-                        f"Discovery server listening on UDP {self.ip_address}:{port}."
-                    )
+                self.logger.info(f"Discovery server ready on {self.ip_address}:{port}.")
 
             def datagram_received(_self, data: bytes, addr: str) -> None:
                 rcv_message = ChordMessage.decode(data)
 
                 if not rcv_message:
-                    if self.is_debug:
-                        self.logger.debug(
-                            f"Invalid multicast message received: {data.decode()}"
-                        )
+                    self.logger.debug(
+                        f"Invalid multicast message received: {data.decode()}"
+                    )
                     return
 
                 if rcv_message.ring_signature.strip():
-                    if self.is_debug:
-                        self.logger.debug(
-                            f"Invalid ring signature received on multicast: {rcv_message.ring_signature}"
-                        )
+                    self.logger.debug(
+                        f"Invalid ring signature received on multicast: {rcv_message.ring_signature}"
+                    )
                     return
 
                 ip_addres, _ = addr
@@ -813,12 +767,10 @@ class ChordNode:
                 asyncio.create_task(self.join_node(node_ref))
 
             def error_received(_self, exc: Exception) -> None:
-                if self.is_debug:
-                    self.logger.error(f"Multicast error received: {exc}")
+                self.logger.error(f"Multicast error received: {exc}")
 
             def connection_lost(_self, exc: Exception) -> None:
-                if self.is_debug:
-                    self.logger.error(f"Multicast connection lost: {exc}")
+                self.logger.error(f"Multicast connection lost: {exc}")
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.bind(("", port))
@@ -842,10 +794,6 @@ class ChordNode:
     async def join_node(self, node_ref: ChordNodeReference) -> None:
         succ = await self.find_successor(node_ref.node_id)
         pred = await self.find_predecessor(succ.node_id)
-
-        self.logger.debug(
-            f"Found predecessor {succ.node_id} and predecessor {pred.node_id}."
-        )
 
         if succ.node_id == node_ref.node_id:
             # The node already is joined to the ring
@@ -900,11 +848,9 @@ class ChordNode:
 
         try:
             sock.sendto(message_encoded, (multicast_group, port))
-            if self.is_debug:
-                self.logger.debug("Message sent using multicast.")
+            self.logger.debug("Message sent using multicast.")
         except Exception as ex:
-            if self.is_debug:
-                self.logger.error(f"Error sending multicast message: {ex}")
+            self.logger.debug(f"Error sending multicast message: {ex}")
         finally:
             sock.close()
 
