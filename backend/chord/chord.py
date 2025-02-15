@@ -207,7 +207,13 @@ class ChordNode:
 
             if self.succesor.node_id != self.node_id:
                 self.logger.debug("Sending ping to successor node.")
-                succ_response = await self.ping_node(self.succesor)
+
+                try:
+                    succ_response = await asyncio.wait_for(
+                        self.ping_node(self.succesor), timeout=1.0
+                    )
+                except asyncio.TimeoutError:
+                    succ_response = None
 
                 if not succ_response:
                     self.logger.warning("Successor node died, stibilizing...")
@@ -855,17 +861,30 @@ class ChordNode:
             sock.close()
 
     async def discover(self):
+        if self.succesor.node_id != self.predecessor.node_id:
+            self.logger.warning("This node already is connected to a network.")
+            return
+
         self.multicast_sender(MessageContent())
 
         await asyncio.sleep(1)
 
         await self.update_all_finger_tables()
 
+        if self.succesor.node_id != self.node_id:
+            self.logger.info("Successfully joined the network.")
+        else:
+            self.logger.info("No network available, starting a new one.")
+
     async def discover_join_start(self) -> None:
         await asyncio.gather(
             self.discover(),
             self.start(),
         )
+
+    @classmethod
+    def get_instance(cls):
+        return cls._instance
 
 
 def get_hash(key: str, bit_count: int = 32) -> int:
