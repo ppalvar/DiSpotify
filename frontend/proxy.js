@@ -1,7 +1,7 @@
 const http = require('http');
 const httpProxy = require('http-proxy');
 
-const targetHost = 'http://10.0.11.2'; // Backend IP
+const targetHost = 'http://10.0.1.2'; // Backend IP
 const targetPort = 8000;
 
 const proxy = httpProxy.createProxyServer({});
