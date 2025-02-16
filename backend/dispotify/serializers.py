@@ -84,7 +84,7 @@ class AudioStreamerSerializer(serializers.Serializer):
             return response
 
     def get_file_name(self, audio_id: str):
-        return f"../audios/{audio_id}"
+        return f"/app/data/audios/{audio_id}"
 
 
 class ArtistSerializer(serializers.ModelSerializer):
@@ -186,7 +186,7 @@ class SongSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         if "id" not in validated_data:
-            key = f"{validated_data['title']:{validated_data['album']}}"
+            key = f"{validated_data['title']}:{validated_data['album']}"
             validated_data["id"] = hash_string(key)
 
         id = validated_data["id"]
@@ -200,7 +200,7 @@ class SongSerializer(serializers.ModelSerializer):
 
         song = super().create(validated_data)
 
-        file_path = f"../audios/{id}"
+        file_path = f"/app/data/audios/{id}"
         with open(file_path, "wb") as f:
             f.write(data)
 

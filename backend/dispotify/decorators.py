@@ -21,7 +21,13 @@ def chord_distribute(k: int, _key: Literal[None, "metadata"] = None):
 
             assert node
 
-            key = request.body.decode("utf-8") if not _key else _key
+            req_method = request.method
+            req_body = request.body.decode()
+            req_headers = dict(request.headers)
+            req_path = request.path
+            req_params = request.GET
+
+            key = req_body if not _key else _key
             data_id = get_hash(key)
 
             succ = async_to_sync(node.find_successor)(data_id)
@@ -38,7 +44,14 @@ def chord_distribute(k: int, _key: Literal[None, "metadata"] = None):
                 if rep.node_id == node.node_id:
                     response = view_func(self, request, *args, **kwargs)
                 else:
-                    response = forward_request_to_successor(rep, request)
+                    response = forward_request_to_successor(
+                        rep,
+                        req_method,
+                        req_body,
+                        req_headers,
+                        req_path,
+                        req_params,
+                    )
 
             return response
 
@@ -48,30 +61,34 @@ def chord_distribute(k: int, _key: Literal[None, "metadata"] = None):
 
 
 def forward_request_to_successor(
-    succ: ChordNodeReference, request: HttpRequest
+    succ: ChordNodeReference,
+    method: str | None,
+    body: str | None,
+    headers: dict | None,
+    path: str,
+    params,
 ) -> HttpResponse:
-    url = f"http://{succ.ip_address}:8000{request.path}"
-    headers = dict(request.headers)
+    url = f"http://{succ.ip_address}:8000{path}"
 
     headers[TARGETING_HEADER] = ChordNode.get_instance().ring_signature  # type: ignore
 
     print(f"Redireccionando a {url}.")
 
     try:
-        if request.method == "POST":
-            response = requests.post(url, data=request.body, headers=headers)
+        if method == "POST":
+            response = requests.post(url, data=body, headers=headers)
 
-        elif request.method == "GET":
-            response = requests.get(url, headers=headers, params=request.GET)
+        elif method == "GET":
+            response = requests.get(url, headers=headers, params=params)
 
-        elif request.method == "PUT":
-            response = requests.put(url, data=request.body, headers=headers)
+        elif method == "PUT":
+            response = requests.put(url, data=body, headers=headers)
 
-        elif request.method == "DELETE":
+        elif method == "DELETE":
             response = requests.delete(url, headers=headers)
 
-        elif request.method == "PATCH":
-            response = requests.patch(url, data=request.body, headers=headers)
+        elif method == "PATCH":
+            response = requests.patch(url, data=body, headers=headers)
 
         else:
             return HttpResponse("Unknown HTTP method.", status=500)

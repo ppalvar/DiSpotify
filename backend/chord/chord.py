@@ -198,6 +198,7 @@ class ChordNode:
 
     async def stabilize(self) -> None:
         last_entry = self.succesor
+        last_entry_succ = self.succesor
 
         while True:
             await asyncio.sleep(PING_INTERVAL)
@@ -210,22 +211,19 @@ class ChordNode:
                     f"Sending ping to successor node. [{self.predecessor.node_id}] -> [{self.node_id}] -> [{self.succesor.node_id}]"
                 )
 
-                try:
-                    succ_response = await asyncio.wait_for(
-                        self.ping_node(self.succesor), timeout=1.0
-                    )
-                except asyncio.TimeoutError:
-                    succ_response = None
+                succ_response = await self.ping_node(self.succesor)
 
                 if not succ_response:
                     self.logger.warning("Successor node died, stibilizing...")
 
-                    self.succesor = last_entry
+                    has_backup = await self.ping_node(last_entry)
+
+                    self.succesor = last_entry if has_backup else last_entry_succ
 
                     await self.request_update_predecessor(last_entry, self.auto_ref)
 
                     await self.update_all_finger_tables(
-                        self.node_id + 1,
+                        (self.node_id + 1) % (1 << self.id_bitlen),
                         self.succesor.node_id,
                         self.succesor,
                     )
@@ -234,6 +232,11 @@ class ChordNode:
 
                 else:
                     _, last_entry = succ_response
+                    succ_response = await self.ping_node(last_entry)
+
+                    if succ_response:
+                        _, last_entry_succ = succ_response
+
                     self.logger.debug("Everything all right!")
 
     async def start(self) -> None:
@@ -539,16 +542,23 @@ class ChordNode:
             self.logger.info(f"Couldn't join: {response.content.message}")
 
     async def find_successor(self, target_id: int) -> ChordNodeReference:
-        if is_between(target_id, self.predecessor.node_id + 1, self.node_id):
+        if is_between(
+            target_id,
+            (self.predecessor.node_id + 1) % (1 << self.id_bitlen),
+            self.node_id,
+        ):
             return self.auto_ref
 
-        if is_between(target_id, self.node_id + 1, self.succesor.node_id):
+        if is_between(
+            target_id, (self.node_id + 1) % (1 << self.id_bitlen), self.succesor.node_id
+        ):
             return self.succesor
 
         best_match = self.succesor
         for entry in self.finger_table:
             if is_between(target_id, self.node_id, entry.node_id):
-                best_match = entry
+                break
+            best_match = entry
 
         response = await self.send_message(
             SUCC_REQUEST,
@@ -640,7 +650,7 @@ class ChordNode:
     ) -> None:
         if new_responsible is None or from_index is None or to_index is None:
             new_responsible = self.auto_ref
-            from_index = self.predecessor.node_id + 1
+            from_index = (self.predecessor.node_id + 1) % (1 << self.id_bitlen)
             to_index = self.node_id
 
         new_singnature = uuid4().hex
@@ -653,7 +663,7 @@ class ChordNode:
             self.logger.debug(f"Updating ftable of {current.node_id}.")
 
             await self.update_finger_table_static(
-                last.node_id + 1,
+                (last.node_id + 1) % (1 << self.id_bitlen),
                 current.node_id,
                 current,
             )
@@ -684,7 +694,7 @@ class ChordNode:
             )
 
         await self.update_finger_table_static(
-            self.predecessor.node_id + 1,
+            (self.predecessor.node_id + 1) % (1 << self.id_bitlen),
             self.node_id,
             self.auto_ref,
         )
@@ -695,12 +705,15 @@ class ChordNode:
         self, node: ChordNodeReference
     ) -> tuple[ChordNodeReference, ChordNodeReference] | None:
         try:
-            response = await self.send_message(
-                PING,
-                MessageContent(),
-                node.ip_address,
-                node.port,
-                node.node_id,
+            response = await asyncio.wait_for(
+                self.send_message(
+                    PING,
+                    MessageContent(),
+                    node.ip_address,
+                    node.port,
+                    node.node_id,
+                ),
+                1.0,
             )
 
             if response and isinstance(response.content, PingResponse):
@@ -730,7 +743,9 @@ class ChordNode:
         replicants: List[ChordNodeReference] = [start]
 
         for _ in range(k - 1):
-            succ = await self.find_successor(current.node_id + 1)
+            succ = await self.find_successor(
+                (current.node_id + 1) % (1 << self.id_bitlen)
+            )
 
             if succ.node_id == start.node_id:
                 break
