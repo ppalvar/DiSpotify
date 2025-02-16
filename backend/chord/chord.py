@@ -206,7 +206,9 @@ class ChordNode:
                 await self.update_all_finger_tables()
 
             if self.succesor.node_id != self.node_id:
-                self.logger.debug("Sending ping to successor node.")
+                self.logger.debug(
+                    f"Sending ping to successor node. [{self.predecessor.node_id}] -> [{self.node_id}] -> [{self.succesor.node_id}]"
+                )
 
                 try:
                     succ_response = await asyncio.wait_for(
@@ -720,12 +722,19 @@ class ChordNode:
 
         return None
 
-    async def get_replicants(self, k: int) -> List[ChordNodeReference]:
-        replicants: List[ChordNodeReference] = []
+    async def get_replicants(
+        self, k: int, start: ChordNodeReference | None = None
+    ) -> List[ChordNodeReference]:
+        start = self.auto_ref if not start else start
+        current = start
+        replicants: List[ChordNodeReference] = [start]
 
-        current = self.auto_ref
-        for _ in range(k):
+        for _ in range(k - 1):
             succ = await self.find_successor(current.node_id + 1)
+
+            if succ.node_id == start.node_id:
+                break
+
             replicants.append(succ)
             current = succ
 
@@ -893,7 +902,15 @@ def get_hash(key: str, bit_count: int = 32) -> int:
     hash_hex = sha256_hash.hexdigest()
     hash_int = int(hash_hex, 16)
 
-    return hash_int % (2 << bit_count)
+    return hash_int % (1 << bit_count)
+
+
+def hash_string(key: str) -> str:
+    sha256_hash = hashlib.sha256()
+    sha256_hash.update(key.encode("utf-8"))
+    hash_hex = sha256_hash.hexdigest()
+
+    return hash_hex
 
 
 def get_ip_address(ifname: str = "eth0") -> str:
