@@ -8,12 +8,12 @@ https://docs.djangoproject.com/en/4.1/howto/deployment/wsgi/
 """
 
 import os
-import asyncio
 import threading
 
 from django.core.wsgi import get_wsgi_application
 from chord.chord import ChordNode, get_hash, get_ip_address
 
+from asgiref.sync import async_to_sync
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "backend.settings")
 
@@ -26,9 +26,8 @@ def start_chord_node():
     node_id = get_hash(f"{ip_address}:{port}")
 
     node = ChordNode(ip_address, port, node_id, is_debug=False)
-    asyncio.run(node.discover_join_start())
+    async_to_sync(node.discover_join_start)()
 
 
-# Ejecutar el anillo de Chord en un hilo separado
 chord_thread = threading.Thread(target=start_chord_node, daemon=True)
 chord_thread.start()
