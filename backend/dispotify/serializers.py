@@ -94,12 +94,14 @@ class ArtistSerializer(serializers.ModelSerializer):
 
         extra_kwargs = {
             "name": {"required": True, "min_length": 1},
-            "id": {"required": False},
+            "id": {"required": True},
         }
 
     def create(self, validated_data):
+        print(">>>", validated_data)
         if "id" not in validated_data:
             validated_data["id"] = hash_string(validated_data["name"])
+            print("Viva pepe!")
         return super().create(validated_data)
 
 

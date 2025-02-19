@@ -7,12 +7,14 @@ import socket
 import ssl
 import struct
 import time
+import os
 from uuid import uuid4
 from typing import List, Optional
 from pydantic import BaseModel
 
 
 from chord.chord_messages import (
+    CheckFileRequest,
     GenericResponse,
     JoinRequestMessage,
     JoinResponse,
@@ -20,6 +22,7 @@ from chord.chord_messages import (
     PingResponse,
     PredRequestMessage,
     PredResponse,
+    SendFileRequest,
     SuccRequestMessage,
     SuccResponse,
     UpdateFTableRequest,
@@ -42,6 +45,8 @@ PING = "PING"
 ADOPTION_REQUEST = "ADOPTION_REQUEST"
 UPDATE_ALL_FTABLES_REQUEST = "UPDATE_ALL_FTABLES_REQUEST"
 MULTICAST = "MULTICAST"
+CHECK_FILE = "CHECK_FILE"
+FILE_SEND_REQUEST = "FILE_SEND_REQUEST"
 
 
 CHORD_MESSAGE_TYPES = [
@@ -56,6 +61,8 @@ CHORD_MESSAGE_TYPES = [
     ADOPTION_REQUEST,
     UPDATE_ALL_FTABLES_REQUEST,
     MULTICAST,
+    CHECK_FILE,
+    FILE_SEND_REQUEST,
 ]
 
 
@@ -136,6 +143,7 @@ class ChordNode:
         node_id: int = 0,
         id_bitlen: int = 32,
         is_debug: bool = False,
+        file_path: str = "/app/data/audios",  # Assume here all filenames are the id's
     ) -> None:
         if not hasattr(self, "initialized"):
             self.ip_address = ip_address
@@ -154,6 +162,8 @@ class ChordNode:
             self.logger = logging.getLogger(__name__)
 
             self.must_update_ftables = False
+
+            self.file_path = file_path
 
             self.initialized = True
 
@@ -237,6 +247,30 @@ class ChordNode:
                     if succ_response:
                         _, last_entry_succ = succ_response
 
+                    self.logger.debug("Checking for file backups...")
+
+                    replicants = await self.get_replicants(3)
+
+                    for replicant in replicants:
+                        for file in os.listdir(self.file_path):
+                            file_id = os.path.basename(file)
+                            if not file_id.isalnum():
+                                continue
+
+                            file_id_node = int(file_id, 16) % (1 << self.id_bitlen)
+
+                            if not is_between(
+                                file_id_node, self.node_id, self.succesor.node_id
+                            ):
+                                continue
+
+                            if not await self.check_file(file_id, replicant):
+                                self.logger.debug(
+                                    f"Backing up file {file_id} on node {replicant.node_id}."
+                                )
+                                await self.send_file(file_id, replicant)
+                                self.logger.debug("Backup done!")
+
                     self.logger.debug("Everything all right!")
 
     async def start(self) -> None:
@@ -260,7 +294,7 @@ class ChordNode:
                 2 << self.id_bitlen
             ):
                 await self.send_message(
-                    "RESPONSE",
+                    RESPONSE,
                     GenericResponse(is_success=False, message="Your Id is not valid."),
                     reader=reader,
                     writer=writer,
@@ -270,7 +304,7 @@ class ChordNode:
 
             if succesor.node_id == message.content.my_id:
                 await self.send_message(
-                    "RESPONSE",
+                    RESPONSE,
                     GenericResponse(
                         is_success=False, message="Your Id is already being used."
                     ),
@@ -290,7 +324,7 @@ class ChordNode:
             await self.request_update_predecessor(succesor, new_node_ref)
 
             await self.send_message(
-                "RESPONSE",
+                RESPONSE,
                 JoinResponse(
                     is_success=True,
                     message="Welcome to the fellowship of the Chord.",
@@ -310,14 +344,14 @@ class ChordNode:
                 self.ring_signature = message.ring_signature
 
                 await self.send_message(
-                    "RESPONSE",
+                    RESPONSE,
                     GenericResponse(is_success=True),
                     reader=reader,
                     writer=writer,
                 )
             else:
                 await self.send_message(
-                    "RESPONSE",
+                    RESPONSE,
                     GenericResponse(
                         is_success=False,
                         message="This node has a family, it cannot be adopted.",
@@ -328,7 +362,7 @@ class ChordNode:
 
         elif self.ring_signature != message.ring_signature:
             await self.send_message(
-                "RESPONSE",
+                RESPONSE,
                 GenericResponse(
                     is_success=False,
                     message="The provided signature is not valid.",
@@ -348,7 +382,7 @@ class ChordNode:
                 success = False
 
             await self.send_message(
-                "RESPONSE",
+                RESPONSE,
                 SuccResponse(
                     is_success=success,
                     ip_address=succesor.ip_address,
@@ -392,7 +426,7 @@ class ChordNode:
             self.ring_signature = message.content.new_signature
 
             await self.send_message(
-                "RESPONSE",
+                RESPONSE,
                 SuccResponse(
                     is_success=True,
                     ip_address=self.succesor.ip_address,
@@ -423,7 +457,7 @@ class ChordNode:
 
         elif ms_type == PING:
             await self.send_message(
-                "RESPONSE",
+                RESPONSE,
                 PingResponse(
                     is_success=True,
                     message="Still alive.",
@@ -441,11 +475,42 @@ class ChordNode:
         elif ms_type == UPDATE_ALL_FTABLES_REQUEST:
             self.must_update_ftables = True
             await self.send_message(
-                "RESPONSE",
+                RESPONSE,
                 GenericResponse(is_success=True),
                 reader=reader,
                 writer=writer,
-                omit_signature=True,
+            )
+        elif ms_type == CHECK_FILE:
+            assert isinstance(message.content, CheckFileRequest)
+
+            filename = f"{self.file_path}/{message.content.file_id}"
+
+            success = os.path.exists(filename) and os.path.isfile(filename)
+
+            await self.send_message(
+                RESPONSE,
+                GenericResponse(
+                    is_success=success,
+                    message="File found." if success else "File not found.",
+                ),
+                reader=reader,
+                writer=writer,
+            )
+        elif ms_type == FILE_SEND_REQUEST:
+            assert isinstance(message.content, SendFileRequest)
+
+            await self.send_message(
+                RESPONSE,
+                GenericResponse(is_success=True),
+                reader=reader,
+                writer=writer,
+            )
+
+            await self.receive_file(
+                message.content.file_id,
+                message.content.file_size,
+                writer,
+                reader,
             )
 
     async def send_message(
@@ -458,6 +523,7 @@ class ChordNode:
         reader: asyncio.StreamReader | None = None,
         writer: asyncio.StreamWriter | None = None,
         omit_signature: bool = False,
+        force_get_response: bool = False,
     ) -> ChordMessage | None:
         assert message_type.upper() in CHORD_MESSAGE_TYPES
         assert target_id is None or target_id < (
@@ -475,16 +541,13 @@ class ChordNode:
         clean = False
 
         try:
-            if not reader or not writer:
-                ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-                ssl_context.load_verify_locations(cafile="ssl_cert/cert.pem")
-
-                ssl_context.check_hostname = False
-
-                reader, writer = await asyncio.open_connection(
-                    target_ip, target_port, ssl=ssl_context
+            if (not reader or not writer) and (target_ip and target_port):
+                reader, writer, clean = await self.get_sending_stream(
+                    target_ip, target_port
                 )
-                clean = True
+
+            assert writer
+            assert reader
 
             writer.write(message_encoded)
             await writer.drain()
@@ -496,8 +559,27 @@ class ChordNode:
 
                 response = ChordMessage.decode(response)
                 return response
+            elif force_get_response:
+                response = await reader.read(1024)
+                response = ChordMessage.decode(response)
+                return response
+
         except Exception as e:
             self.logger.debug(f"Failed to send message: {e}")
+
+    async def get_sending_stream(
+        self, target_ip: str, target_port: int
+    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, bool]:
+        ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+        ssl_context.load_verify_locations(cafile="ssl_cert/cert.pem")
+
+        ssl_context.check_hostname = False
+
+        reader, writer = await asyncio.open_connection(
+            target_ip, target_port, ssl=ssl_context
+        )
+        clean = True
+        return reader, writer, clean
 
     async def request_join(
         self, target_ip: str, target_port: int, target_id: int
@@ -909,6 +991,97 @@ class ChordNode:
     @classmethod
     def get_instance(cls):
         return cls._instance
+
+    async def check_file(self, file_id: str, target: ChordNodeReference) -> bool:
+        response = await self.send_message(
+            CHECK_FILE,
+            CheckFileRequest(file_id=file_id),
+            target.ip_address,
+            target.port,
+            target.node_id,
+        )
+
+        if (
+            not response
+            or not isinstance(response.content, GenericResponse)
+            or not response.content.is_success
+        ):
+            return False
+        return True
+
+    async def send_file(self, file_id: str, target: ChordNodeReference) -> None:
+        filename = f"{self.file_path}/{file_id}"
+        file_size = os.path.getsize(filename)
+
+        reader, writer, _ = await self.get_sending_stream(
+            target.ip_address, target.port
+        )
+
+        response = await self.send_message(
+            FILE_SEND_REQUEST,
+            SendFileRequest(file_id=file_id, file_size=file_size),
+            reader=reader,
+            writer=writer,
+            target_id=target.node_id,
+            force_get_response=True,
+        )
+
+        if (
+            not response
+            or not isinstance(response.content, GenericResponse)
+            or not response.content.is_success
+        ):
+            return
+
+        try:
+            with open(filename, "rb") as file:
+                while True:
+                    chunk = file.read(1024)
+
+                    if not chunk:
+                        break
+
+                    writer.write(chunk)
+
+                await writer.drain()
+
+                self.logger.info(
+                    f"File {file_id} sent successfully to {target.node_id}."
+                )
+        except Exception as e:
+            self.logger.error(f"Failed to send file {file_id}: {e}")
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    async def receive_file(
+        self,
+        file_id: str,
+        file_size: int,
+        writer: asyncio.StreamWriter,
+        reader: asyncio.StreamReader,
+    ) -> None:
+        filename = f"{self.file_path}/{file_id}"
+
+        try:
+            with open(filename, "wb") as file:
+                while file_size > 0:
+                    chunk = await reader.read(1024)
+
+                    if not chunk:
+                        break
+
+                    file.write(chunk)
+                    file_size -= len(chunk)
+
+                self.logger.info(f"File {file_id} received successfully.")
+
+            if os.path.getsize(filename) < file_size:
+                self.logger.error(f"File {file_id} is corrupted and will be removed.")
+                os.remove(filename)
+
+        except Exception as e:
+            self.logger.error(f"Failed to receive file {file_id}: {e}")
 
 
 def get_hash(key: str, bit_count: int = 32) -> int:

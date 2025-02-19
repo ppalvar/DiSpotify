@@ -94,6 +94,7 @@ CORS_ALLOW_HEADERS = [
     "user-agent",
     "x-csrftoken",
     "x-requested-with",
+    "Access-Control-Allow-Origin",
 ]
 
 # Si necesitas permitir el envío de cookies

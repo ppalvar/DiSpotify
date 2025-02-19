@@ -1,12 +1,13 @@
 from typing import Literal
 import requests
+import json
 
 from functools import wraps
 from rest_framework import viewsets
 from django.http import HttpRequest, HttpResponse
 from asgiref.sync import async_to_sync
 
-from chord.chord import ChordNode, ChordNodeReference, get_hash
+from chord.chord import ChordNode, ChordNodeReference, get_hash, hash_string
 
 TARGETING_HEADER = "Chord-Target-Signature"
 
@@ -30,12 +31,31 @@ def chord_distribute(k: int, _key: Literal[None, "metadata"] = None):
             key = req_body if not _key else _key
             data_id = get_hash(key)
 
+            try:
+                json_body = json.loads(req_body)
+
+                if "id" not in json_body:
+                    json_body["id"] = hash_string(req_body)
+
+                if "audio_id" in req_params:
+                    data_id = int(req_params["audio_id"], 16) % (1 << node.id_bitlen)
+                elif "id" in req_params:
+                    data_id = int(req_params["id"], 16) % (1 << node.id_bitlen)
+                else:
+                    data_id = int(json_body["id"], 16) % (1 << node.id_bitlen)
+                req_body = json.dumps(json_body)
+            except json.JSONDecodeError:
+                print("Request body is not JSON, this must be an error.")
+
             succ = async_to_sync(node.find_successor)(data_id)
             replicants = async_to_sync(node.get_replicants)(k, succ)  # Usar k aquí
 
-            print(f">>>>>> {key} {data_id} -> {[r.node_id for r in replicants]}")
+            target_signature = req_headers.get(TARGETING_HEADER, None)
 
-            target_signature = request.headers.get(TARGETING_HEADER, None)
+            # This is a hack to make the request body available in the view function.
+            # It's not a good idea to modify the request object like this, but it's the only way to make it work.
+            # TODO: Find a better way to do this. Perhaps...
+            setattr(request, "body", req_body.encode())
 
             if target_signature == node.ring_signature:
                 return view_func(self, request, *args, **kwargs)
@@ -71,8 +91,6 @@ def forward_request_to_successor(
     url = f"http://{succ.ip_address}:8000{path}"
 
     headers[TARGETING_HEADER] = ChordNode.get_instance().ring_signature  # type: ignore
-
-    print(f"Redireccionando a {url}.")
 
     try:
         if method == "POST":

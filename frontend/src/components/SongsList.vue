@@ -35,7 +35,7 @@
         @click="playAudio(song.id)"
       >
         <img
-          src="https://via.placeholder.com/40"
+          src="https://placehold.co/40x40"
           class="me-3"
           alt="Album cover"
         />

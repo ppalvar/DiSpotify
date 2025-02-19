@@ -13,6 +13,15 @@ class SuccRequestMessage(BaseModel):
     target_id: int
 
 
+class CheckFileRequest(BaseModel):
+    file_id: str
+
+
+class SendFileRequest(BaseModel):
+    file_id: str
+    file_size: int
+
+
 class PredRequestMessage(SuccRequestMessage):
     pass
 
