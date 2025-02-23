@@ -1,7 +1,7 @@
 <template>
   <div class="current-song-area">
     <div class="current-song-info">
-      <img src="https://placehold.co/250x250?text={currentSong.name.replace(/ /g, '+') + '.'}" alt="Current song" />
+      <img src="https://placehold.co/250x250?text=⚜" alt="Current song" />
       <h4 class="mb-1">{{ currentSong.name }}</h4>
       <p class="text-muted mb-3">
         {{ currentSong.artist }} - {{ currentSong.album }}

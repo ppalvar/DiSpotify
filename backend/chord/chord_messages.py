@@ -49,6 +49,15 @@ class UpdateFTableRequest(BaseModel):
     new_signature: str
 
 
+class AdoptionRequest(BaseModel):
+    succ_ip_address: str
+    succ_port: int
+    succ_node_id: int
+    pred_ip_address: str
+    pred_port: int
+    pred_node_id: int
+
+
 class GenericResponse(BaseModel):
     is_success: bool
     message: Optional[str] = None

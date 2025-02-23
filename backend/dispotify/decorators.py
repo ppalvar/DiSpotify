@@ -7,7 +7,7 @@ from rest_framework import viewsets
 from django.http import HttpRequest, HttpResponse
 from asgiref.sync import async_to_sync
 
-from chord.chord import ChordNode, ChordNodeReference, get_hash, hash_string
+from chord.chord import ChordNode, ChordNodeReference, hash_string
 
 TARGETING_HEADER = "Chord-Target-Signature"
 
@@ -28,24 +28,27 @@ def chord_distribute(k: int, _key: Literal[None, "metadata"] = None):
             req_path = request.path
             req_params = request.GET
 
-            key = req_body if not _key else _key
-            data_id = get_hash(key)
+            key = hash_string(req_body if not _key else _key)
 
             try:
                 json_body = json.loads(req_body)
 
                 if "id" not in json_body:
-                    json_body["id"] = hash_string(req_body)
-
-                if "audio_id" in req_params:
-                    data_id = int(req_params["audio_id"], 16) % (1 << node.id_bitlen)
-                elif "id" in req_params:
-                    data_id = int(req_params["id"], 16) % (1 << node.id_bitlen)
+                    json_body["id"] = key
                 else:
-                    data_id = int(json_body["id"], 16) % (1 << node.id_bitlen)
+                    key = json_body["id"]
                 req_body = json.dumps(json_body)
+
             except json.JSONDecodeError:
-                print("Request body is not JSON, this must be an error.")
+                pass
+
+            data_id = int(key, 16) % (1 << node.id_bitlen)
+
+            if "audio_id" in req_params:
+                data_id = int(req_params["audio_id"], 16) % (1 << node.id_bitlen)
+
+            elif "id" in req_params:
+                data_id = int(req_params["id"], 16) % (1 << node.id_bitlen)
 
             succ = async_to_sync(node.find_successor)(data_id)
             replicants = async_to_sync(node.get_replicants)(k, succ)  # Usar k aquí

@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 
 from chord.chord_messages import (
+    AdoptionRequest,
     CheckFileRequest,
     GenericResponse,
     JoinRequestMessage,
@@ -64,6 +65,8 @@ CHORD_MESSAGE_TYPES = [
     CHECK_FILE,
     FILE_SEND_REQUEST,
 ]
+
+CHORD_LOCK = asyncio.Lock()
 
 
 class ChordMessage:
@@ -144,6 +147,7 @@ class ChordNode:
         id_bitlen: int = 32,
         is_debug: bool = False,
         file_path: str = "/app/data/audios",  # Assume here all filenames are the id's
+        database_path: str = "/app/data/db/db.sqlite3",
     ) -> None:
         if not hasattr(self, "initialized"):
             self.ip_address = ip_address
@@ -164,6 +168,7 @@ class ChordNode:
             self.must_update_ftables = False
 
             self.file_path = file_path
+            self.database_path = database_path
 
             self.initialized = True
 
@@ -200,78 +205,115 @@ class ChordNode:
                 )
                 await self.handle_message(message, reader, writer)
             else:
-                self.logger.debug("Received invalid message")
+                self.logger.debug(f"Received invalid message: {data}")
+        except Exception as e:
+            self.logger.error(f"Some error occured while handling message: {e}")
+        finally:
             writer.close()
             await writer.wait_closed()
-        except Exception as e:
-            self.logger.debug(f"Some error occured while handling message: {e}")
 
     async def stabilize(self) -> None:
-        last_entry = self.succesor
-        last_entry_succ = self.succesor
+        last_entries = []
 
         while True:
             await asyncio.sleep(PING_INTERVAL)
-
             if self.must_update_ftables:
                 await self.update_all_finger_tables()
 
             if self.succesor.node_id != self.node_id:
-                self.logger.debug(
-                    f"Sending ping to successor node. [{self.predecessor.node_id}] -> [{self.node_id}] -> [{self.succesor.node_id}]"
-                )
+                async with CHORD_LOCK:
+                    if not last_entries:
+                        last_entries = [self.succesor]
 
-                succ_response = await self.ping_node(self.succesor)
+                    for _ in range(len(last_entries)):
+                        print([e.node_id for e in last_entries])
+                        last_entry = last_entries[0]
 
-                if not succ_response:
-                    self.logger.warning("Successor node died, stibilizing...")
+                        self.logger.debug(
+                            f"Sending ping to successor node. [{self.predecessor.node_id}] -> [{self.node_id}] -> [{self.succesor.node_id}]"
+                        )
 
-                    has_backup = await self.ping_node(last_entry)
+                        succ_response = await self.ping_node(self.succesor)
 
-                    self.succesor = last_entry if has_backup else last_entry_succ
+                        if not succ_response:
+                            self.logger.warning("Successor node died, stabilizing...")
 
-                    await self.request_update_predecessor(last_entry, self.auto_ref)
+                            try:
+                                self.succesor = last_entry
 
-                    await self.update_all_finger_tables(
-                        (self.node_id + 1) % (1 << self.id_bitlen),
-                        self.succesor.node_id,
-                        self.succesor,
-                    )
+                                await asyncio.wait_for(
+                                    self.request_update_predecessor(
+                                        last_entry, self.auto_ref
+                                    ),
+                                    1,
+                                )
 
-                    self.logger.info("STABILIZING DONE!")
+                                await self.update_all_finger_tables(
+                                    (self.node_id + 1) % (1 << self.id_bitlen),
+                                    self.succesor.node_id,
+                                    self.succesor,
+                                )
 
-                else:
-                    _, last_entry = succ_response
-                    succ_response = await self.ping_node(last_entry)
+                                last_entries = (
+                                    await self.get_replicants(3, self.succesor)
+                                )[1:]
 
-                    if succ_response:
-                        _, last_entry_succ = succ_response
+                                self.logger.info("STABILIZING DONE!!!")
+
+                                break
+                            except Exception:  # Cannot stabilize
+                                last_entries.pop(0)
+                        else:
+                            last_entries = (
+                                await self.get_replicants(3, self.succesor)
+                            )[1:]
+
+                            self.logger.info("SYSTEM STABLE!!!")
+                            break
+
+                    else:
+                        self.logger.error(
+                            "The system cannot be further stabilized. RIP CHORD."
+                        )
+                        raise SystemError(
+                            "The system cannot be further stabilized. RIP CHORD."
+                        )
 
                     self.logger.debug("Checking for file backups...")
+                    await self.backup_files()
 
-                    replicants = await self.get_replicants(3)
+    async def backup_files(self):
+        try:
+            for file in os.listdir(self.file_path):
+                file_id = os.path.basename(file)
+                if not file_id.isalnum():
+                    continue
 
-                    for replicant in replicants:
-                        for file in os.listdir(self.file_path):
-                            file_id = os.path.basename(file)
-                            if not file_id.isalnum():
-                                continue
+                file_node_id = int(file_id, 16) % (1 << self.id_bitlen)
 
-                            file_id_node = int(file_id, 16) % (1 << self.id_bitlen)
+                file_succ = await self.find_successor(file_node_id)
 
-                            if not is_between(
-                                file_id_node, self.node_id, self.succesor.node_id
-                            ):
-                                continue
+                replicants = await self.get_replicants(3, file_succ)
 
-                            if not await self.check_file(file_id, replicant):
-                                self.logger.debug(
-                                    f"Backing up file {file_id} on node {replicant.node_id}."
-                                )
-                                await self.send_file(file_id, replicant)
-                                self.logger.debug("Backup done!")
+                keep_file_flag = False
 
-                    self.logger.debug("Everything all right!")
+                for replicant in replicants:
+                    keep_file_flag = keep_file_flag or replicant.node_id == self.node_id
+
+                    if not await self.check_file(file_id, replicant):
+                        self.logger.debug(
+                            f"Backing up file {file_id} on node {replicant.node_id}."
+                        )
+                        await self.send_file(file_id, replicant)
+                        self.logger.debug("Backup done!")
+
+                if not keep_file_flag:
+                    self.logger.debug(
+                        f"File {file} is no longer needed and will be deleted."
+                    )
+                    os.remove(os.path.join(self.file_path, file))
+        except Exception as e:
+            self.logger.debug(f"Error while making backups: {e}")
 
     async def start(self) -> None:
         await asyncio.gather(
@@ -340,8 +382,22 @@ class ChordNode:
             )
 
         elif ms_type == ADOPTION_REQUEST:
+            assert isinstance(message.content, AdoptionRequest)
+
             if self.predecessor.node_id == self.node_id == self.succesor.node_id:
                 self.ring_signature = message.ring_signature
+
+                self.predecessor = ChordNodeReference(
+                    message.content.pred_ip_address,
+                    message.content.pred_port,
+                    message.content.pred_node_id,
+                )
+
+                self.succesor = ChordNodeReference(
+                    message.content.succ_ip_address,
+                    message.content.succ_port,
+                    message.content.succ_node_id,
+                )
 
                 await self.send_message(
                     RESPONSE,
@@ -742,7 +798,7 @@ class ChordNode:
         current = self.succesor
 
         while current.node_id != self.node_id:
-            self.logger.debug(f"Updating ftable of {current.node_id}.")
+            # self.logger.debug(f"Updating ftable of {current.node_id}.")
 
             await self.update_finger_table_static(
                 (last.node_id + 1) % (1 << self.id_bitlen),
@@ -825,9 +881,13 @@ class ChordNode:
         replicants: List[ChordNodeReference] = [start]
 
         for _ in range(k - 1):
-            succ = await self.find_successor(
-                (current.node_id + 1) % (1 << self.id_bitlen)
-            )
+            succ_ping = await self.ping_node(current)
+
+            if not succ_ping:
+                self.logger.error("Cannot get replicants.")
+                continue
+
+            _, succ = succ_ping
 
             if succ.node_id == start.node_id:
                 break
@@ -854,13 +914,13 @@ class ChordNode:
                 rcv_message = ChordMessage.decode(data)
 
                 if not rcv_message:
-                    self.logger.debug(
+                    self.logger.warning(
                         f"Invalid multicast message received: {data.decode()}"
                     )
                     return
 
                 if rcv_message.ring_signature.strip():
-                    self.logger.debug(
+                    self.logger.warning(
                         f"Invalid ring signature received on multicast: {rcv_message.ring_signature}"
                     )
                     return
@@ -911,10 +971,17 @@ class ChordNode:
             # The node already is joined to the ring
             return
 
-        self.logger.debug("Adopting node")
+        # self.logger.debug("Adopting node")
         adopt_response = await self.send_message(
             ADOPTION_REQUEST,
-            MessageContent(),
+            AdoptionRequest(
+                succ_ip_address=succ.ip_address,
+                succ_port=succ.port,
+                succ_node_id=succ.node_id,
+                pred_ip_address=pred.ip_address,
+                pred_port=pred.port,
+                pred_node_id=pred.node_id,
+            ),
             node_ref.ip_address,
             node_ref.port,
             node_ref.node_id,
@@ -930,13 +997,12 @@ class ChordNode:
 
             return
 
-        self.logger.debug("Node adopted")
-
-        await self.request_update_successor(node_ref, succ)
-        await self.request_update_predecessor(node_ref, pred)
+        self.logger.debug(f"Node {node_ref.node_id} adopted")
 
         await self.request_update_successor(pred, node_ref)
         await self.request_update_predecessor(succ, node_ref)
+
+        await self.send_file(None, node_ref)
 
     def multicast_sender(
         self,
@@ -960,9 +1026,9 @@ class ChordNode:
 
         try:
             sock.sendto(message_encoded, (multicast_group, port))
-            self.logger.debug("Message sent using multicast.")
+            # self.logger.debug("Message sent using multicast.")
         except Exception as ex:
-            self.logger.debug(f"Error sending multicast message: {ex}")
+            self.logger.error(f"Error sending multicast message: {ex}")
         finally:
             sock.close()
 
@@ -1009,8 +1075,12 @@ class ChordNode:
             return False
         return True
 
-    async def send_file(self, file_id: str, target: ChordNodeReference) -> None:
-        filename = f"{self.file_path}/{file_id}"
+    async def send_file(self, file_id: str | None, target: ChordNodeReference) -> None:
+        if not file_id:
+            filename = self.database_path
+        else:
+            filename = f"{self.file_path}/{file_id}"
+
         file_size = os.path.getsize(filename)
 
         reader, writer, _ = await self.get_sending_stream(
@@ -1019,7 +1089,7 @@ class ChordNode:
 
         response = await self.send_message(
             FILE_SEND_REQUEST,
-            SendFileRequest(file_id=file_id, file_size=file_size),
+            SendFileRequest(file_id=file_id if file_id else "", file_size=file_size),
             reader=reader,
             writer=writer,
             target_id=target.node_id,
@@ -1061,7 +1131,10 @@ class ChordNode:
         writer: asyncio.StreamWriter,
         reader: asyncio.StreamReader,
     ) -> None:
-        filename = f"{self.file_path}/{file_id}"
+        if not file_id:
+            filename = self.database_path
+        else:
+            filename = f"{self.file_path}/{file_id}"
 
         try:
             with open(filename, "wb") as file:

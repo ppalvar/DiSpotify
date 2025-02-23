@@ -43,7 +43,7 @@ class ArtistViewSet(viewsets.ModelViewSet):
 
     permission_classes = [AllowAny]
 
-    @chord_distribute(3, "metadata")
+    @chord_distribute(100, "metadata")
     def create(self, request, *args, **kwargs):
         return super().create(request, *args, **kwargs)
 
@@ -83,7 +83,7 @@ class AlbumViewSet(viewsets.ModelViewSet):
 
     permission_classes = [AllowAny]
 
-    @chord_distribute(3, "metadata")
+    @chord_distribute(100, "metadata")
     def create(self, request, *args, **kwargs):
         return super().create(request, *args, **kwargs)
 
@@ -122,7 +122,7 @@ class SongViewSet(viewsets.ModelViewSet):
     lookup_field = "id"
     permission_classes = [AllowAny]
 
-    @chord_distribute(3, "metadata")
+    @chord_distribute(100, "metadata")
     def create(self, request, *args, **kwargs):
         return super().create(request, *args, **kwargs)
 

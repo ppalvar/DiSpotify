@@ -4,12 +4,13 @@ import base64
 from mutagen.mp3 import MP3
 from dataclasses import dataclass
 from rest_framework import serializers
+from asgiref.sync import async_to_sync
 
 from .models import Album, Artist, Song
 from chord.chord import ChordNode, hash_string
 
+
 CHUNK_SIZE = 1 << 15  # 32kB
-CHORD_NODE = ChordNode._instance
 
 
 @dataclass
@@ -202,8 +203,16 @@ class SongSerializer(serializers.ModelSerializer):
 
         song = super().create(validated_data)
 
-        file_path = f"/app/data/audios/{id}"
-        with open(file_path, "wb") as f:
-            f.write(data)
+        chord_instance = ChordNode.get_instance()
+
+        assert chord_instance
+
+        song_node_id = int(id, 16) % (1 << chord_instance.id_bitlen)
+        succ = async_to_sync(chord_instance.find_successor)(song_node_id)
+
+        if chord_instance.node_id == succ.node_id:
+            file_path = f"/app/data/audios/{id}"
+            with open(file_path, "wb") as f:
+                f.write(data)
 
         return song

@@ -25,7 +25,7 @@ def start_chord_node():
     port = 4321
     node_id = get_hash(f"{ip_address}:{port}")
 
-    node = ChordNode(ip_address, port, node_id, is_debug=True)
+    node = ChordNode(ip_address, port, node_id, is_debug=False)
     async_to_sync(node.discover_join_start)()
 
 
